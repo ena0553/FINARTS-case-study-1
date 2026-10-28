@@ -1,0 +1,339 @@
+---
+title: "Group Case 1 — BDO Unibank (BDO): Data Download & Transformation Setup"
+subtitle: "Preparing the Monthly Research Dataset for Baseline Multiple Linear Regression"
+author: "FINARTS C01 — Group 1"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    number_sections: false
+    code_folding: show
+  pdf_document:
+    toc: true
+    toc_depth: 2
+    number_sections: false
+    latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  comment = "",
+  fig.path = "04_Figures/generated-",
+  fig.align = "center"
+)
+
+options(xts.warn_dplyr_breaks_lag = FALSE)
+
+suppressWarnings(
+  suppressPackageStartupMessages({
+    library(tidyverse)
+    library(quantmod)
+    library(lubridate)
+    library(flextable)
+    library(broom)
+    library(scales)
+    library(zoo)
+    library(lmtest)
+    library(sandwich)
+  })
+)
+
+cobalt_kable <- function(x, caption = NULL, digits = 4) {
+  is_knitting <- !is.null(knitr::opts_knit$get("rmarkdown.pandoc.to"))
+  if (!is_knitting) {
+    knitr::kable(
+      x, digits = digits, caption = caption,
+      format = "html",
+      table.attr = 'style="color:#FFFFFF !important; background-color:transparent !important;"'
+    )
+  } else if (knitr::is_html_output()) {
+    knitr::kable(
+      x, digits = digits, caption = caption,
+      format = "html",
+      table.attr = 'style="color:#222222 !important; background-color:transparent !important;"'
+    )
+  } else {
+    knitr::kable(
+      x, digits = digits, caption = caption,
+      format = "latex",
+      booktabs = FALSE
+    )
+  }
+}
+
+research_flextable <- function(x) {
+  flextable(x) |>
+    theme_vanilla() |>
+    bold(part = "header") |>
+    fontsize(size = 9.5, part = "all") |>
+    align(align = "left", part = "all") |>
+    valign(valign = "center", part = "all") |>
+    autofit()
+}
+```
+
+
+```{r parameters}
+# Download one month early: the January 2018 log change needs December 2017 as its base
+download_from <- as.Date("2017-12-01")
+download_to   <- as.Date("2025-12-31")
+
+# Estimation sample (monthly)
+sample_start <- as.Date("2018-01-01")
+sample_end   <- as.Date("2025-12-01")
+
+# Local file holding BDO, PSEi and the BSP / PSA monthly series (already transformed)
+local_file <- file.path("local_data.csv")
+```
+
+# Section 4 — The Candidate Regressors and Their Required Transformations
+
+This table reproduces the case brief. The **Source route** column determines whether a series is downloaded automatically or imported from the local file.
+
+```{r variable-dictionary}
+variable_dictionary <- tribble(
+  ~`#`, ~Candidate_Regressor,                 ~Dataset_Code,                  ~Transformation,           ~Source,                        ~Route,
+  0,    "BDO monthly log return (DEPENDENT)", "BDO_Return",                   "Monthly log return",      "Local CSV (price history)",    "Local CSV",
+  1,    "PSEi return",                        "PSEi_Return",                  "Monthly log return",      "Local CSV (price history)",    "Local CSV",
+  2,    "BSP RRP rate change",                "BSP_RRP_Change",               "Month-end first difference", "BSP",                         "Local CSV",
+  3,    "PH 10Y gov't-yield change",          "PH_10Y_Change",                "Month-end first difference", "Instructor-supplied",         "Local CSV",
+  4,    "USD/PHP change",                     "USD_PHP_Change",               "Monthly log change",      "BSP monthly FX / Yahoo (PHP=X)", "Download",
+  5,    "CPI inflation",                      "PH_CPI_YoY",                   "YoY % change",            "PSA OpenSTAT",                 "Local CSV",
+  6,    "M3 growth",                          "PH_M3_YoY",                    "YoY % growth",            "BSP Domestic Liquidity",       "Omitted (no data)",
+  7,    "OFW remittance growth",              "PH_OFW_Remittances_YoY",       "YoY % growth",            "BSP OF remittances",           "Local CSV",
+  8,    "Manufacturing-production growth",    "PH_Manufacturing_Production_YoY", "YoY % growth",         "PSA MISSI",                    "Local CSV",
+  9,    "WTI return",                         "WTI_Return",                   "Monthly log return",      "FRED DCOILWTICO",              "Download",
+  10,   "VIX",                                "VIX",                          "Monthly average",         "FRED VIXCLS",                  "Download"
+)
+
+variable_dictionary |>
+  research_flextable()
+```
+
+**Units to keep in mind before interpreting any coefficient later:**
+
+- Returns and log changes (`BDO_Return`, `PSEi_Return`, `USD_PHP_Change`, `WTI_Return`) are in **decimals** (0.01 = 1%).
+  The local CSV stores `BDO_return` and `PSEI_return` in **percent**, so they are divided by 100 on import to match.
+- Rate and yield changes (`BSP_RRP_Change`, `PH_10Y_Change`) are in **percentage points**.
+- Year-over-year variables (`*_YoY`) are in **percent** (5 = 5%).
+- `VIX` is an **index level**.
+- `USD_PHP_Change > 0` means the **peso depreciated** (more PHP per USD).
+
+# Section 5 — Download USD/PHP from Yahoo Finance
+
+BDO and the PSEi now come from the local CSV (Section 9). Only USD/PHP is still downloaded from Yahoo Finance. The helper below returns `NULL` (instead of crashing the whole document) if a download fails, so the problem is easy to diagnose.
+
+```{r yahoo-download}
+safe_get <- function(symbol, src) {
+  tryCatch(
+    suppressWarnings(
+      getSymbols(symbol, src = src,
+                 from = download_from, to = download_to,
+                 auto.assign = FALSE)
+    ),
+    error = function(e) {
+      message("Download failed for ", symbol, " (", src, "): ", conditionMessage(e))
+      NULL
+    }
+  )
+}
+
+# Use the adjusted close when it exists (equities); otherwise the close (index, FX).
+price_series <- function(x) {
+  if (is.null(x)) return(NULL)
+  if (has.Ad(x)) Ad(x) else Cl(x)
+}
+
+usdphp_raw <- safe_get("PHP=X", "yahoo")   # USD/PHP exchange rate (PHP per USD)
+usdphp_px  <- price_series(usdphp_raw)
+```
+
+# Section 6 — Download Global Variables from FRED
+
+```{r fred-download}
+vix_raw <- safe_get("VIXCLS",      "FRED")   # CBOE VIX, daily close
+wti_raw <- safe_get("DCOILWTICO",  "FRED")   # WTI crude oil, daily spot
+```
+
+# Section 7 — Inspect Frequencies and Timing
+
+The series do not arrive at the same frequency or on the same dates. Aligning them correctly is part of the research design.
+
+```{r frequency-inspection}
+tibble(
+  Series = c("PHP=X", "VIXCLS", "DCOILWTICO",
+             "BDO", "PSEi", "BSP RRP rate", "PH 10Y yield", "PH CPI",
+             "OFW remittances", "Manufacturing production"),
+  Source = c(rep("Download", 3), rep("Local CSV", 7)),
+  Monthly_Rule = c("Monthly average", "Monthly average", "Monthly average",
+                   "Already monthly (log return)", "Already monthly (log return)",
+                   "Already monthly (first difference)", "Already monthly (first difference)",
+                   "Already monthly (YoY %)", "Already monthly (YoY %)",
+                   "Already monthly (YoY %)")
+) |>
+  cobalt_kable(caption = "Source and Monthly Aggregation Rule")
+```
+
+**Why these rules?**
+
+- USD/PHP: BSP publishes **monthly average** exchange rates, so the monthly average of daily quotes is the closest match.
+- VIX and WTI: **monthly average**, as specified in the brief.
+- BDO, PSEi, the policy rate and yield, CPI, remittances and manufacturing arrive in the local CSV already as monthly returns, first differences or YoY rates.
+- M3 growth is omitted because no usable data could be found online.
+
+# Section 8 — Convert the Downloaded Series to a Common Monthly Key
+
+Every series is converted to a `yearmon` key (e.g., "Jan 2018") **before** joining. This avoids silently losing observations because one source stamps a month on its first day and another on its last.
+
+```{r monthly-helpers}
+monthly_df_xts <- function(x, name, how = c("last", "mean")) {
+  how <- match.arg(how)
+  if (is.null(x)) return(NULL)
+
+  tibble(
+    date  = as.Date(index(x)),
+    value = as.numeric(x[, 1])
+  ) |>
+    filter(is.finite(value)) |>
+    arrange(date) |>
+    mutate(month = as.yearmon(date)) |>
+    group_by(month) |>
+    summarise(
+      value = if (how == "last") dplyr::last(value) else mean(value),
+      .groups = "drop"
+    ) |>
+    rename(!!name := value)
+}
+
+# --- Daily market series -> monthly averages ---
+usdphp_df <- monthly_df_xts(usdphp_px, "USD_PHP", how = "mean")
+vix_df    <- monthly_df_xts(vix_raw,   "VIX",     how = "mean")
+wti_df    <- monthly_df_xts(wti_raw,   "WTI",     how = "mean")
+```
+
+```{r preview-monthly}
+# View the first few rows of the monthly aggregated data
+head(usdphp_df)
+head(vix_df)
+head(wti_df)
+```
+# Section 9 — Load the Local CSV (BDO, PSEi, BSP / PSA Series)
+
+The local CSV already contains the transformed series (BDO and PSEi returns, month-end first differences, YoY rates), so **no further transformation is applied**. It is used exactly as supplied; the only step is turning the `month` label into a `yearmon` key so it can be joined to the downloaded data.
+
+**M3 growth is omitted** from this dataset because no usable data could be found online.
+
+```{r load-local}
+if (!file.exists(local_file)) {
+  stop("Cannot find '", local_file, "'. Place it in the same folder as this .Rmd.")
+}
+
+local_df <- readr::read_csv(local_file, show_col_types = FALSE) |>
+  mutate(month = as.yearmon(month, format = "%b %Y"))
+
+stopifnot(!anyNA(local_df$month), !anyDuplicated(local_df$month))
+
+head(local_df)
+```
+
+# Section 10 — Log Changes for the Downloaded Series
+
+Only the downloaded data needs transforming. USD/PHP and WTI use `log(level_t) - log(level_{t-1})`; VIX stays as a monthly average level. December 2017 is in the downloaded data only to supply the base for January 2018 and is dropped by the join.
+
+```{r market-transforms}
+market_list <- list(USD_PHP = usdphp_df, VIX = vix_df, WTI = wti_df)
+
+failed <- names(Filter(is.null, market_list))
+if (length(failed) > 0) {
+  stop("These downloads failed, so the dataset cannot be built: ",
+       paste(failed, collapse = ", "))
+}
+
+log_change <- function(x) log(x) - dplyr::lag(log(x))
+
+market_df <- usdphp_df |>
+  full_join(vix_df, by = "month") |>
+  full_join(wti_df, by = "month") |>
+  arrange(month) |>
+  mutate(
+    USD_PHP_Change = log_change(USD_PHP),
+    WTI_Return     = log_change(WTI)
+  ) |>
+  select(month, USD_PHP_Change, WTI_Return, VIX)
+
+head(market_df)
+```
+
+
+# Section 11 — Join the Downloaded Data with the CSV Data
+
+A complete monthly spine (Jan 2018 to Dec 2025) is built first, and each table is left-joined to it on the `yearmon` key. Any month missing from a source therefore shows up as an `NA` instead of silently disappearing.
+
+```{r join-tables}
+month_spine <- tibble(
+  month = as.yearmon(seq(sample_start, sample_end, by = "month"))
+)
+
+analysis_df <- month_spine |>
+  left_join(local_df,  by = "month") |>
+  left_join(market_df, by = "month")
+
+analysis_df |>
+  head(12) |>
+  cobalt_kable(caption = "Analysis Dataset (first 12 months)")
+```
+
+```{r join-checks}
+tibble(
+  Check = c("Rows (expected 96)", "Columns (month + dependent + regressors)",
+            "First month", "Last month", "Total missing values"),
+  Result = c(nrow(analysis_df), ncol(analysis_df),
+             format(min(analysis_df$month)), format(max(analysis_df$month)),
+             sum(is.na(analysis_df)))
+) |>
+  cobalt_kable(caption = "Join Checks")
+
+# Missing values per column (all should be 0)
+analysis_df |>
+  summarise(across(everything(), ~ sum(is.na(.x)))) |>
+  pivot_longer(everything(), names_to = "Variable", values_to = "Missing") |>
+  cobalt_kable(caption = "Missing Values by Variable")
+
+# Save the ready-to-model table
+readr::write_csv(
+  analysis_df |> mutate(month = format(month)),
+  "analysis_dataset.csv"
+)
+view(analysis_df)
+```
+
+# Section 12 — Baseline Multiple Linear Regression
+
+A single baseline model using every available column as a regressor (M3 excluded), fitted on the full sample. Only its fit is reported here.
+
+```{r baseline-lm}
+dep_var <- "BDO_return"   # dependent variable: BDO monthly log return (column name in the local CSV)
+
+model_data <- analysis_df |>
+  select(-month) |>
+  drop_na()
+
+baseline_lm <- lm(reformulate(".", response = dep_var), data = model_data)
+
+# --- Regression accuracy (in-sample) ---
+tibble(
+  Metric = c("Observations used", "R-squared", "Adjusted R-squared", "RMSE", "MAE"),
+  Value  = c(nobs(baseline_lm),
+             summary(baseline_lm)$r.squared,
+             summary(baseline_lm)$adj.r.squared,
+             sqrt(mean(residuals(baseline_lm)^2)),
+             mean(abs(residuals(baseline_lm))))
+) |>
+  cobalt_kable(caption = "Baseline Linear Regression — Fit (in-sample)")
+coef(baseline_lm)
+```
