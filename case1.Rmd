@@ -43,6 +43,17 @@ suppressWarnings(
   })
 )
 
+# Use full available width for HTML flextables
+flextable::set_flextable_defaults(
+  post_process_html = function(ft) {
+    flextable::set_table_properties(
+      ft,
+      layout = "autofit",
+      width = 1
+    )
+  }
+)
+
 cobalt_kable <- function(x, caption = NULL, digits = 4) {
   is_knitting <- !is.null(knitr::opts_knit$get("rmarkdown.pandoc.to"))
   if (!is_knitting) {
@@ -342,32 +353,17 @@ coef(baseline_lm)
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # 4.3 Statistical Inference
 
-These tables examine how financial and economic factors are linked to BDO's monthly returns while accounting for the other factors in the model. They describe relationships in the data, not proof of cause and effect. Changes in BDO returns are measured in percentage points.
+The baseline model is used to check how each factor is related to BDO's monthly return while accounting for the other factors. Changes in BDO return are measured in percentage points. These results describe associations and do not establish cause and effect.
 
 
 ## 4.3.1 Individual Coefficient Tests
 
-For each explanatory variable, use a two-sided test at the 5% significance level:
+Each factor is tested at the 5% significance level. The test allows for either a positive or negative relationship, so it is called a two-sided test.
 
-- **Null hypothesis (H0):** The factor has no linear association with BDO return after accounting for the other included factors. Its coefficient equals zero.
-- **Alternative hypothesis (H1):** The factor has a positive or negative linear association with BDO return after accounting for the other included factors. Its coefficient differs from zero.
+- **Null hypothesis (H0):** The factor's coefficient is zero. It has no linear association with BDO return once the other factors in the model are taken into account.
+- **Alternative hypothesis (H1):** The factor's coefficient is not zero. It has a positive or negative linear association with BDO return once the other factors are taken into account.
 
 A factor's coefficient shows the estimated change in BDO return for a one-unit increase in that factor, holding the other included variables constant.
 
@@ -375,11 +371,10 @@ A factor's coefficient shows the estimated change in BDO return for a one-unit i
 - **Positive coefficient:** A higher factor value is associated with higher BDO return.
 - **Negative coefficient:** A higher factor value is associated with lower BDO return.
 
-An estimate can be nonzero without being statistically significant.
+An estimate can be positive or negative even when the evidence is too weak to call it statistically significant.
 
 ```{r inference-individual-hypotheses}
-# Each row defines the hypotheses for that named coefficient.
-# The intercept is the constant term; the other rows are the nine factors.
+# Set up the hypotheses for the constant and the nine factors
 individual_hypotheses <- tibble(
   Term = names(coef(baseline_lm)),
   H0 = "This coefficient equals zero",
@@ -397,12 +392,14 @@ individual_hypotheses |>
   flextable::flextable()
 ```
 
+
 ```{r inference-coefficient-tests}
-# Retain unrounded results for decisions and later calculations.
+# Keep the full values when making decisions and calculating effects
 inference_alpha <- 0.05
 
 factor_details <- tribble(
   ~term, ~Variable, ~Scenario, ~Scenario_Change,
+
   "PSEI_return",
   "PSEi return",
   "+1 percentage point in market return",
@@ -449,7 +446,7 @@ factor_details <- tribble(
   10
 )
 
-# Match the actual CSV names, including its manufacturing-column spelling.
+# Use the column names exactly as they appear in the CSV
 stopifnot(setequal(
   factor_details$term,
   setdiff(names(coef(baseline_lm)), "(Intercept)")
@@ -498,19 +495,15 @@ coefficient_results |>
     )
   ) |>
   flextable::flextable()
-
-significant_slopes <- coefficient_results |>
-  filter(
-    term != "(Intercept)",
-    p.value < inference_alpha
-  )
 ```
+
 
 ## 4.3.2 Confidence Intervals and Parameter Uncertainty
 
-A confidence interval gives a range of values consistent with the estimated coefficient and its uncertainty. A wider range means less precision. If the 95% interval includes zero, the data do not clearly distinguish that coefficient from zero at the 5% significance level.
+The 95% confidence interval shows a range of values consistent with the coefficient estimate and its uncertainty. A wider interval means the estimate is less precise. If the interval includes zero, there is not enough evidence to say that the coefficient differs from zero at the 5% significance level.
 
 ```{r inference-confidence-intervals}
+# Find the 95% confidence interval for each coefficient
 confidence_intervals <- confint(
   baseline_lm,
   level = 1 - inference_alpha
@@ -549,12 +542,13 @@ confidence_intervals |>
   flextable::flextable()
 ```
 
+
 ## 4.3.3 Statistical versus Economic Significance
 
-Statistical significance checks whether a relationship is clearly detected. Economic significance considers whether its estimated size matters financially. These tables estimate changes in BDO returns for typical factor movements and specific scenarios.
+Statistical significance tells us whether there is enough evidence to detect a relationship. Economic significance asks whether the estimated change in BDO return is large enough to matter financially. The tables below show estimated changes for a typical movement in each factor and for selected scenarios.
 
 ```{r inference-economic-significance}
-# Account for percent versus decimal-log units.
+# Use each factor's units when working out the estimated changes
 bdo_return_sd <- sd(model_data[[dep_var]])
 
 economic_effects <- coefficient_results |>
@@ -571,8 +565,6 @@ economic_effects <- coefficient_results |>
     ),
 
     One_SD_Effect = estimate * Factor_SD,
-    One_SD_Lower_95 = conf.low * Factor_SD,
-    One_SD_Upper_95 = conf.high * Factor_SD,
 
     Significant_at_5pct = if_else(
       p.value < inference_alpha,
@@ -608,11 +600,12 @@ economic_effects |>
   flextable::flextable()
 ```
 
-One-SD represents a typical-sized movement based on how much a factor varies in the sample. The percentage column compares the estimated change with BDO's usual monthly swings, not the model's explanatory power. Scenario intervals show uncertainty in the estimated changes, not future returns.
+One standard deviation (One-SD) describes how much a factor typically varies in this sample. The percentage column compares the size of the estimated change with BDO's usual monthly variation. It is not the share of returns explained by the model. The scenario intervals show uncertainty around the estimated changes; they are not forecasts of future returns.
+
 
 ## 4.3.4 Joint Hypothesis Tests
 
-The first test checks whether the factors collectively help explain BDO returns. The second checks whether the eight additional factors provide information beyond PSEi returns. These tests assess groups of coefficients together; a significant group result does not mean every factor in that group is individually significant.
+The first test asks whether the nine factors together help explain BDO returns. The second asks whether the other eight factors add information beyond PSEi alone. Each group is tested as a whole, so a significant result does not tell us which individual factors matter.
 
 ```{r inference-joint-hypotheses}
 joint_hypotheses <- tribble(
@@ -632,17 +625,19 @@ joint_hypotheses |>
 ```
 
 ```{r inference-joint-tests}
-# Fit the market-only model using the same complete sample.
+# Fit the PSEi-only model using the same months as the baseline
 market_lm <- lm(
   BDO_return ~ PSEI_return,
   data = model_data
 )
 
+# Test whether the eight other factors add information beyond PSEi
 nonmarket_joint_test <- anova(
   market_lm,
   baseline_lm
 )
 
+# Get the overall F-test from the baseline model
 overall_f <- summary(baseline_lm)$fstatistic
 
 joint_test_results <- tibble(
@@ -690,8 +685,6 @@ joint_test_results |>
     )
   ) |>
   flextable::flextable()
-
-nonmarket_joint_p <- joint_test_results$p.value[2]
 ```
 
-These tests assume that the unexplained part of BDO returns has a similar spread across observations and is not correlated across months. If these assumptions do not hold, the reported p-values and confidence intervals may give an inaccurate picture of uncertainty.
+These tests assume that the unexplained part of BDO returns has a similar spread throughout the sample and is not correlated across months. If either assumption is wrong, the p-values and confidence intervals may not reflect the true level of uncertainty.
