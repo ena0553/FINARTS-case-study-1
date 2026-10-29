@@ -688,3 +688,257 @@ joint_test_results |>
 ```
 
 These tests assume that the unexplained part of BDO returns has a similar spread throughout the sample and is not correlated across months. If either assumption is wrong, the p-values and confidence intervals may not reflect the true level of uncertainty.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# 4.4 Model Evaluation and Comparison
+
+Compare three models to see whether adding more factors improves how well they explain BDO returns. Each model uses the same months and the same measure of BDO return to compare them fairly.
+
+
+## 4.4.1 Models Being Compared
+
+- **Market benchmark:** Uses PSEi returns to represent movements in the Philippine stock market.
+- **Market + domestic conditions:** Starts with PSEi and adds changes in the policy rate, government yield, and exchange rate, plus inflation, remittance growth, and manufacturing growth.
+- **Full baseline:** Adds WTI returns and VIX to the domestic model to account for energy prices and global uncertainty.
+
+M3 growth is not available in our dataset, so these models do not directly measure domestic liquidity.
+
+```{r comparison-models}
+# Reuse the market model and the full baseline
+domestic_lm <- lm(
+  BDO_return ~ PSEI_return + BSP_RRP + PH_10Y_Yield + USD_PHP_Change + 
+    CPI + OFW_remittance + manafactuting_prod_growth,
+  data = model_data
+)
+
+comparison_models <- list(
+  "Market benchmark" = market_lm,
+  "Market + domestic conditions" = domestic_lm,
+  "Full baseline" = baseline_lm
+)
+
+# Check that each model uses the same months and BDO returns
+baseline_frame <- model.frame(baseline_lm)
+
+stopifnot(all(vapply(
+  comparison_models,
+  function(fit) {
+    identical(
+      rownames(model.frame(fit)),
+      rownames(baseline_frame)
+    ) &&
+      identical(
+        model.response(model.frame(fit)),
+        model.response(baseline_frame)
+      )
+  },
+  logical(1)
+)))
+```
+
+
+## 4.4.2 Model Fit and Complexity
+
+- **N / Slopes:** Number of months / explanatory factors, excluding the constant.
+- **R-squared:** Share of variation in BDO returns explained by the model. A higher value means a closer fit in this sample.
+- **Adjusted R-squared:** Adjusts for the number of factors, so adding factors does not always raise it.
+- **AIC/BIC:** Compare fit while accounting for extra parameters. Lower values are preferred when models use the same outcome and observations.
+
+```{r comparison-fit-table}
+# Keep the full values when comparing the models
+model_comparison <- purrr::imap_dfr(
+  comparison_models,
+  function(fit, model_name) {
+    tibble(
+      Model = model_name,
+      N = nobs(fit),
+      Slopes = length(coef(fit)) - 1,
+      R_Squared = summary(fit)$r.squared,
+      Adjusted_R_Squared = summary(fit)$adj.r.squared,
+      AIC = AIC(fit),
+      BIC = BIC(fit),
+      RMSE = sqrt(mean(residuals(fit)^2)),
+      MAE = mean(abs(residuals(fit)))
+    )
+  }
+)
+
+model_comparison |>
+  select(
+    Model,
+    N,
+    Slopes,
+    R_Squared,
+    Adjusted_R_Squared,
+    AIC,
+    BIC
+  ) |>
+  flextable::flextable()
+```
+
+- **RMSE:** Summarizes the gaps between actual and fitted BDO returns. Large gaps have more weight in this measure.
+- **MAE:** Shows the average size of those gaps, whether the model estimates returns too high or too low.
+
+Both measures are in percentage points. Lower values mean the fitted returns are closer to the actual returns in this sample. A separate check would be needed using new observations to assess future predictions.
+
+```{r comparison-errors}
+model_comparison |>
+  select(Model, RMSE, MAE) |>
+  flextable::flextable()
+```
+
+
+## 4.4.3 Nested-Model Comparisons
+
+Each test compares a smaller model with one that contains all its factors plus some extra ones. The first adds six domestic factors to the PSEi model. The second adds WTI returns and VIX to the domestic model. Each test checks whether the added group helps explain BDO returns.
+
+- **Null hypothesis (H0):** The added factors' coefficients are all zero. They have no additional linear association with BDO return after accounting for the factors already in the model.
+- **Alternative hypothesis (H1):** At least one added coefficient is not zero. At least one added factor has an additional linear association with BDO return.
+
+```{r comparison-nested-hypotheses}
+nested_hypotheses <- tribble(
+  ~Comparison, ~H0, ~H1,
+
+  "Domestic conditions beyond market",
+  "All six added domestic coefficients equal zero",
+  "At least one of the six added domestic coefficients differs from zero",
+
+  "Global factors beyond domestic model",
+  "The WTI and VIX coefficients both equal zero",
+  "At least one of the WTI and VIX coefficients differs from zero"
+)
+
+nested_hypotheses |>
+  flextable::flextable()
+```
+
+`Added_Slopes` is the number of added factors. `RSS_Reduction` is the drop in total squared fitting errors. The F-statistic compares that improvement with the error remaining in the larger model. If the p-value is below 0.05, reject H0. Otherwise, there is not enough evidence that the added group improves the model.
+
+```{r comparison-nested-tests}
+# Compare each smaller model with the model containing the added factors
+nested_tests <- list(
+  "Domestic conditions beyond market" =
+    anova(market_lm, domestic_lm),
+
+  "Global factors beyond domestic model" =
+    anova(domestic_lm, baseline_lm)
+)
+
+nested_test_results <- purrr::imap_dfr(
+  nested_tests,
+  function(test, test_name) {
+    tibble(
+      Comparison = test_name,
+      Added_Slopes = test[["Df"]][2],
+      RSS_Reduction = test[["Sum of Sq"]][2],
+      F_Statistic = test[["F"]][2],
+      Denominator_DF = test[["Res.Df"]][2],
+      p.value = test[["Pr(>F)"]][2]
+    )
+  }
+) |>
+  mutate(
+    Decision = if_else(
+      p.value < inference_alpha,
+      "Reject H0; evidence that the added factors improve explanatory fit",
+      "Fail to reject H0; insufficient evidence that the added factors improve explanatory fit"
+    )
+  )
+
+nested_test_results |>
+  mutate(
+    p.value = format.pval(
+      p.value,
+      digits = 3,
+      eps = 0.0001
+    )
+  ) |>
+  flextable::flextable()
+```
+
+
+## 4.4.4 PSEi Coefficient across Models
+
+For each model, the estimate shows the expected change in BDO return for a one-percentage-point increase in PSEi return, holding the other included factors constant. The estimated change is also in percentage points. The confidence limits show how uncertain the estimate is. The rows are compared to see how the PSEi estimate changes as factors are added; this is not a formal test of equal coefficients.
+
+```{r comparison-market-coefficient}
+# Compare the PSEi estimate and its confidence interval across the models
+market_coefficient_comparison <- purrr::imap_dfr(
+  comparison_models,
+  function(fit, model_name) {
+    broom::tidy(
+      fit,
+      conf.int = TRUE,
+      conf.level = 1 - inference_alpha
+    ) |>
+      filter(term == "PSEI_return") |>
+      mutate(Model = model_name)
+  }
+)
+
+market_coefficient_comparison |>
+  select(
+    Model,
+    estimate,
+    conf.low,
+    conf.high,
+    p.value
+  ) |>
+  mutate(
+    p.value = format.pval(
+      p.value,
+      digits = 3,
+      eps = 0.0001
+    )
+  ) |>
+  flextable::flextable()
+```
+
+
+## 4.4.5 Comparison Summary
+
+This table shows which model scores best on each measure. A higher adjusted R-squared and lower AIC and BIC are looked for. These results help us compare models, but the final choice should also consider financial reasoning, uncertainty, and the tests of added factors. A model should not be chosen just because it has the largest R-squared.
+
+```{r comparison-summary}
+best_adjusted_r2_model <- model_comparison$Model[
+  which.max(model_comparison$Adjusted_R_Squared)
+]
+
+lowest_aic_model <- model_comparison$Model[
+  which.min(model_comparison$AIC)
+]
+
+lowest_bic_model <- model_comparison$Model[
+  which.min(model_comparison$BIC)
+]
+
+criterion_summary <- tibble(
+  Criterion = c(
+    "Highest adjusted R-squared",
+    "Lowest AIC",
+    "Lowest BIC"
+  ),
+  Model = c(
+    best_adjusted_r2_model,
+    lowest_aic_model,
+    lowest_bic_model
+  )
+)
+
+criterion_summary |>
+  flextable::flextable()
+```
+
