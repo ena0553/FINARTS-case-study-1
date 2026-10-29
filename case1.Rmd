@@ -337,3 +337,361 @@ tibble(
   cobalt_kable(caption = "Baseline Linear Regression — Fit (in-sample)")
 coef(baseline_lm)
 ```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# 4.3 Statistical Inference
+
+These tables examine how financial and economic factors are linked to BDO's monthly returns while accounting for the other factors in the model. They describe relationships in the data, not proof of cause and effect. Changes in BDO returns are measured in percentage points.
+
+
+## 4.3.1 Individual Coefficient Tests
+
+For each explanatory variable, use a two-sided test at the 5% significance level:
+
+- **Null hypothesis (H0):** The factor has no linear association with BDO return after accounting for the other included factors. Its coefficient equals zero.
+- **Alternative hypothesis (H1):** The factor has a positive or negative linear association with BDO return after accounting for the other included factors. Its coefficient differs from zero.
+
+A factor's coefficient shows the estimated change in BDO return for a one-unit increase in that factor, holding the other included variables constant.
+
+- **Zero coefficient:** No linear association with BDO return within this model.
+- **Positive coefficient:** A higher factor value is associated with higher BDO return.
+- **Negative coefficient:** A higher factor value is associated with lower BDO return.
+
+An estimate can be nonzero without being statistically significant.
+
+```{r inference-individual-hypotheses}
+# Each row defines the hypotheses for that named coefficient.
+# The intercept is the constant term; the other rows are the nine factors.
+individual_hypotheses <- tibble(
+  Term = names(coef(baseline_lm)),
+  H0 = "This coefficient equals zero",
+  H1 = "This coefficient differs from zero"
+)
+
+individual_hypotheses |>
+  mutate(
+    Term = if_else(
+      Term == "(Intercept)",
+      "Constant (intercept)",
+      Term
+    )
+  ) |>
+  flextable::flextable()
+```
+
+```{r inference-coefficient-tests}
+# Retain unrounded results for decisions and later calculations.
+inference_alpha <- 0.05
+
+factor_details <- tribble(
+  ~term, ~Variable, ~Scenario, ~Scenario_Change,
+  "PSEI_return",
+  "PSEi return",
+  "+1 percentage point in market return",
+  1,
+
+  "BSP_RRP",
+  "BSP policy-rate change",
+  "+0.25 percentage points in rate change",
+  0.25,
+
+  "PH_10Y_Yield",
+  "PH 10Y yield change",
+  "+0.25 percentage points in yield change",
+  0.25,
+
+  "CPI",
+  "CPI inflation",
+  "+1 percentage point in YoY inflation",
+  1,
+
+  "OFW_remittance",
+  "OFW remittance growth",
+  "+5 percentage points in YoY growth",
+  5,
+
+  "manafactuting_prod_growth",
+  "Manufacturing growth",
+  "+10 percentage points in YoY growth",
+  10,
+
+  "USD_PHP_Change",
+  "USD/PHP log change",
+  "+1% in the exchange-rate ratio (peso depreciation)",
+  log(1.01),
+
+  "WTI_Return",
+  "WTI log return",
+  "+10% in the oil-price ratio",
+  log(1.10),
+
+  "VIX",
+  "VIX",
+  "+10 index points",
+  10
+)
+
+# Match the actual CSV names, including its manufacturing-column spelling.
+stopifnot(setequal(
+  factor_details$term,
+  setdiff(names(coef(baseline_lm)), "(Intercept)")
+))
+
+coefficient_results <- broom::tidy(
+  baseline_lm,
+  conf.int = TRUE,
+  conf.level = 1 - inference_alpha
+) |>
+  left_join(
+    factor_details |> select(term, Variable),
+    by = "term"
+  ) |>
+  mutate(
+    Variable = coalesce(Variable, "Constant (intercept)"),
+    Decision = case_when(
+      term == "(Intercept)" & p.value < inference_alpha ~
+        "Reject H0; evidence that the intercept differs from zero",
+
+      term == "(Intercept)" ~
+        "Fail to reject H0; insufficient evidence that the intercept differs from zero",
+
+      p.value < inference_alpha ~
+        "Reject H0; evidence of a linear association with BDO return",
+
+      TRUE ~
+        "Fail to reject H0; insufficient evidence of a linear association with BDO return"
+    )
+  )
+
+coefficient_results |>
+  select(
+    Variable,
+    estimate,
+    std.error,
+    statistic,
+    p.value,
+    Decision
+  ) |>
+  mutate(
+    p.value = format.pval(
+      p.value,
+      digits = 3,
+      eps = 0.0001
+    )
+  ) |>
+  flextable::flextable()
+
+significant_slopes <- coefficient_results |>
+  filter(
+    term != "(Intercept)",
+    p.value < inference_alpha
+  )
+```
+
+## 4.3.2 Confidence Intervals and Parameter Uncertainty
+
+A confidence interval gives a range of values consistent with the estimated coefficient and its uncertainty. A wider range means less precision. If the 95% interval includes zero, the data do not clearly distinguish that coefficient from zero at the 5% significance level.
+
+```{r inference-confidence-intervals}
+confidence_intervals <- confint(
+  baseline_lm,
+  level = 1 - inference_alpha
+) |>
+  as.data.frame() |>
+  rownames_to_column("term")
+
+names(confidence_intervals) <- c(
+  "term",
+  "Lower_95",
+  "Upper_95"
+)
+
+confidence_intervals <- confidence_intervals |>
+  left_join(
+    coefficient_results |>
+      select(term, Variable, estimate),
+    by = "term"
+  ) |>
+  mutate(
+    Includes_Zero = if_else(
+      Lower_95 <= 0 & Upper_95 >= 0,
+      "Yes",
+      "No"
+    )
+  )
+
+confidence_intervals |>
+  select(
+    Variable,
+    estimate,
+    Lower_95,
+    Upper_95,
+    Includes_Zero
+  ) |>
+  flextable::flextable()
+```
+
+## 4.3.3 Statistical versus Economic Significance
+
+Statistical significance checks whether a relationship is clearly detected. Economic significance considers whether its estimated size matters financially. These tables estimate changes in BDO returns for typical factor movements and specific scenarios.
+
+```{r inference-economic-significance}
+# Account for percent versus decimal-log units.
+bdo_return_sd <- sd(model_data[[dep_var]])
+
+economic_effects <- coefficient_results |>
+  filter(term != "(Intercept)") |>
+  left_join(
+    factor_details |> select(-Variable),
+    by = "term"
+  ) |>
+  mutate(
+    Factor_SD = vapply(
+      term,
+      function(variable) sd(model_data[[variable]]),
+      numeric(1)
+    ),
+
+    One_SD_Effect = estimate * Factor_SD,
+    One_SD_Lower_95 = conf.low * Factor_SD,
+    One_SD_Upper_95 = conf.high * Factor_SD,
+
+    Significant_at_5pct = if_else(
+      p.value < inference_alpha,
+      "Yes",
+      "No"
+    ),
+
+    Effect_as_Pct_of_BDO_SD =
+      100 * abs(One_SD_Effect) / bdo_return_sd,
+
+    Scenario_Effect = estimate * Scenario_Change,
+    Scenario_Lower_95 = conf.low * Scenario_Change,
+    Scenario_Upper_95 = conf.high * Scenario_Change
+  )
+
+economic_effects |>
+  select(
+    Variable,
+    Significant_at_5pct,
+    One_SD_Effect,
+    Effect_as_Pct_of_BDO_SD
+  ) |>
+  flextable::flextable()
+
+economic_effects |>
+  select(
+    Variable,
+    Scenario,
+    Scenario_Effect,
+    Scenario_Lower_95,
+    Scenario_Upper_95
+  ) |>
+  flextable::flextable()
+```
+
+One-SD represents a typical-sized movement based on how much a factor varies in the sample. The percentage column compares the estimated change with BDO's usual monthly swings, not the model's explanatory power. Scenario intervals show uncertainty in the estimated changes, not future returns.
+
+## 4.3.4 Joint Hypothesis Tests
+
+The first test checks whether the factors collectively help explain BDO returns. The second checks whether the eight additional factors provide information beyond PSEi returns. These tests assess groups of coefficients together; a significant group result does not mean every factor in that group is individually significant.
+
+```{r inference-joint-hypotheses}
+joint_hypotheses <- tribble(
+  ~Test, ~H0, ~H1,
+
+  "Overall contribution of all factors",
+  "All nine slope coefficients equal zero",
+  "At least one of the nine slope coefficients differs from zero",
+
+  "Additional contribution beyond PSEi",
+  "All eight non-PSEi slope coefficients equal zero",
+  "At least one of the eight non-PSEi slope coefficients differs from zero"
+)
+
+joint_hypotheses |>
+  flextable::flextable()
+```
+
+```{r inference-joint-tests}
+# Fit the market-only model using the same complete sample.
+market_lm <- lm(
+  BDO_return ~ PSEI_return,
+  data = model_data
+)
+
+nonmarket_joint_test <- anova(
+  market_lm,
+  baseline_lm
+)
+
+overall_f <- summary(baseline_lm)$fstatistic
+
+joint_test_results <- tibble(
+  Test = joint_hypotheses$Test,
+
+  F_Statistic = c(
+    unname(overall_f[1]),
+    nonmarket_joint_test[["F"]][2]
+  ),
+
+  Numerator_DF = c(
+    unname(overall_f[2]),
+    nonmarket_joint_test[["Df"]][2]
+  ),
+
+  Denominator_DF = c(
+    unname(overall_f[3]),
+    nonmarket_joint_test[["Res.Df"]][2]
+  ),
+
+  p.value = c(
+    pf(
+      overall_f[1],
+      overall_f[2],
+      overall_f[3],
+      lower.tail = FALSE
+    ),
+    nonmarket_joint_test[["Pr(>F)"]][2]
+  )
+) |>
+  mutate(
+    Decision = if_else(
+      p.value < inference_alpha,
+      "Reject H0; evidence that the tested group contributes explanatory information",
+      "Fail to reject H0; insufficient evidence that the tested group contributes explanatory information"
+    )
+  )
+
+joint_test_results |>
+  mutate(
+    p.value = format.pval(
+      p.value,
+      digits = 3,
+      eps = 0.0001
+    )
+  ) |>
+  flextable::flextable()
+
+nonmarket_joint_p <- joint_test_results$p.value[2]
+```
+
+These tests assume that the unexplained part of BDO returns has a similar spread across observations and is not correlated across months. If these assumptions do not hold, the reported p-values and confidence intervals may give an inaccurate picture of uncertainty.
