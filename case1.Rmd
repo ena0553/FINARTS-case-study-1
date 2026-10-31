@@ -1612,3 +1612,372 @@ tibble(
 ) |>
   flextable::flextable()
 ```
+
+
+
+
+
+# 4.7 Advanced Regression
+
+The sensitivity check in 4.6 showed that some coefficients (notably VIX and the 10Y yield change) changed sign when the crisis months were removed. This section tests directly whether BDO's relationships behave differently during periods of market stress, using a **categorical (dummy) variable with interaction terms**.
+
+## 4.7.1 Method and Stress-Period Definition
+
+`Stress` equals 1 in two externally dated episodes and 0 otherwise:
+
+- **COVID-19 shock:** March to December 2020 (lockdowns, market crash and recovery).
+- **BSP tightening cycle:** May 2022 (first BSP rate hike) to October 2023 (last hike, the off-cycle increase to 6.50%).
+
+The periods are dated from outside events, not from the Cook's distance months in 4.5.4, so the dummy is not fitted to the model's own residuals. The improved specification from 4.6 (winsorized manufacturing growth, Newey-West standard errors) is extended with:
+
+- `Stress`: shift in BDO's average return during stress months, holding the factors constant.
+- `PSEI_return:Stress`: change in BDO's market beta during stress (the most decision-relevant question for an equity holder).
+- `VIX:Stress` and `PH_10Y_Yield:Stress`: change in the two slopes that flipped sign in 4.6.4.
+
+```{r adv-stress-define}
+stress_periods <- tribble(
+  ~Episode,                 ~Start,                   ~End,
+  "COVID-19 shock",         as.yearmon("Mar 2020"),   as.yearmon("Dec 2020"),
+  "BSP tightening cycle",   as.yearmon("May 2022"),   as.yearmon("Oct 2023")
+)
+
+in_stress <- function(months, periods) {
+  Reduce(`|`, purrr::map2(periods$Start, periods$End,
+                          ~ months >= .x & months <= .y))
+}
+
+# Same rows as improved_data (built from model_data, which has no missing values)
+advanced_data <- improved_data |>
+  mutate(Stress = as.numeric(in_stress(diag_months, stress_periods)))
+
+stress_periods |>
+  mutate(
+    Months = purrr::map2_int(Start, End, ~ sum(diag_months >= .x & diag_months <= .y)),
+    Start = format(Start), End = format(End)
+  ) |>
+  flextable::flextable()
+```
+
+```{r adv-stress-describe}
+# How BDO, the market and VIX behaved in calm versus stress months
+advanced_data |>
+  mutate(Period = if_else(Stress == 1, "Stress", "Calm")) |>
+  group_by(Period) |>
+  summarise(
+    Months = n(),
+    BDO_Mean = mean(BDO_return),
+    BDO_SD = sd(BDO_return),
+    PSEi_Mean = mean(PSEI_return),
+    PSEi_SD = sd(PSEI_return),
+    VIX_Mean = mean(VIX),
+    .groups = "drop"
+  ) |>
+  flextable::flextable() |>
+  flextable::colformat_double(digits = 3)
+```
+
+## 4.7.2 Estimation
+
+$$
+\begin{aligned}
+\text{BDO}_t = {} & \beta_0 + \beta_1\,\text{PSEi}_t + \dots + \beta_9\,\text{VIX}_t + \delta_0\,\text{Stress}_t \\
+& + \delta_1\,(\text{PSEi}_t \times \text{Stress}_t) + \delta_2\,(\text{VIX}_t \times \text{Stress}_t) + \delta_3\,(\Delta\text{Y10}_t \times \text{Stress}_t) + u_t
+\end{aligned}
+$$
+
+In calm months the PSEi slope is $\beta_1$; in stress months it is $\beta_1 + \delta_1$. The same logic applies to VIX and the 10Y yield change.
+
+```{r adv-model}
+stress_lm <- lm(
+  BDO_return ~ PSEI_return + BSP_RRP + PH_10Y_Yield + CPI + OFW_remittance +
+    manafactuting_prod_growth + USD_PHP_Change + WTI_Return + VIX +
+    Stress + PSEI_return:Stress + VIX:Stress + PH_10Y_Yield:Stress,
+  data = advanced_data
+)
+
+stress_vcov <- sandwich::NeweyWest(stress_lm, lag = hac_lag, prewhite = FALSE, adjust = TRUE)
+
+stress_results <- lmtest::coeftest(stress_lm, vcov. = stress_vcov) |>
+  broom::tidy() |>
+  left_join(
+    lmtest::coefci(stress_lm, vcov. = stress_vcov, level = 1 - inference_alpha) |>
+      as.data.frame() |>
+      rownames_to_column("term") |>
+      setNames(c("term", "conf.low", "conf.high")),
+    by = "term"
+  )
+
+stress_terms <- c("Stress", "PSEI_return:Stress", "VIX:Stress", "PH_10Y_Yield:Stress")
+
+stress_results |>
+  mutate(p.value = format.pval(p.value, digits = 3, eps = 0.0001)) |>
+  flextable::flextable() |>
+  flextable::colformat_double(digits = 4) |>
+  flextable::bold(i = ~ term %in% stress_terms)
+```
+
+The table below converts the interaction terms into the slope that applies in each regime. The stress-period slope and its standard error come from the linear combination $\beta + \delta$ using the Newey-West covariance matrix.
+
+```{r adv-regime-slopes}
+regime_slope <- function(fit, vc, main, interaction) {
+  calm_est   <- coef(fit)[main]
+  calm_se    <- sqrt(vc[main, main])
+  idx        <- c(main, interaction)
+  stress_est <- sum(coef(fit)[idx])
+  stress_se  <- sqrt(sum(vc[idx, idx]))
+  diff_p     <- 2 * pt(-abs(coef(fit)[interaction] / sqrt(vc[interaction, interaction])),
+                       df.residual(fit))
+  tibble(
+    Factor = main,
+    Calm_Slope = calm_est, Calm_SE = calm_se,
+    Stress_Slope = stress_est, Stress_SE = stress_se,
+    Difference = coef(fit)[interaction],
+    Difference_p = diff_p
+  )
+}
+
+regime_slopes <- bind_rows(
+  regime_slope(stress_lm, stress_vcov, "PSEI_return",  "PSEI_return:Stress"),
+  regime_slope(stress_lm, stress_vcov, "VIX",          "VIX:Stress"),
+  regime_slope(stress_lm, stress_vcov, "PH_10Y_Yield", "PH_10Y_Yield:Stress")
+)
+
+regime_slopes |>
+  mutate(Difference_p = format.pval(Difference_p, digits = 3, eps = 0.0001)) |>
+  flextable::flextable() |>
+  flextable::colformat_double(digits = 4)
+```
+
+## 4.7.3 Do the Stress Terms Improve the Model?
+
+- **H0:** $\delta_0 = \delta_1 = \delta_2 = \delta_3 = 0$ (BDO's relationships are the same in calm and stress months).
+- **H1:** At least one $\delta_j \neq 0$.
+
+The test uses the Newey-West covariance matrix, matching 4.6.
+
+```{r adv-joint-test}
+stress_joint <- lmtest::waldtest(improved_lm, stress_lm, vcov = stress_vcov, test = "F")
+
+tibble(
+  Test = "All four stress terms jointly zero (HAC)",
+  F_Statistic = stress_joint$F[2],
+  Numerator_DF = abs(stress_joint$Df[2]),
+  p.value = stress_joint$`Pr(>F)`[2]
+) |>
+  mutate(
+    Decision = if_else(
+      p.value < inference_alpha,
+      "Reject H0; relationships differ in stress periods",
+      "Fail to reject H0; insufficient evidence that relationships differ in stress periods"
+    ),
+    p.value = format.pval(p.value, digits = 3, eps = 0.0001)
+  ) |>
+  flextable::flextable()
+
+bind_rows(
+  fit_summary(improved_lm, "Improved (4.6)"),
+  fit_summary(stress_lm,   "Improved + stress interactions")
+) |>
+  select(Model, N, R_Squared, Adjusted_R_Squared, AIC, BIC) |>
+  flextable::flextable() |>
+  flextable::colformat_double(digits = 4)
+```
+
+## 4.7.4 Robustness of the Stress Results
+
+A single significant interaction could reflect a handful of months rather than a stable pattern. The model is re-estimated with each episode alone, with narrower and wider windows, and without the Cook's distance months from 4.5.4. Individual p-values use Newey-West standard errors; the joint test is reported with both Newey-West (`Joint_HAC_p`) and ordinary (`Joint_OLS_p`) standard errors, because HAC standard errors can be too small when an interaction is identified by only a few months.
+
+```{r adv-robustness}
+stress_windows <- list(
+  "Main definition"            = stress_periods,
+  "COVID-19 only"              = stress_periods[1, ],
+  "Tightening only"            = stress_periods[2, ],
+  "Narrow (Mar-Jun 2020, May-Dec 2022)" = tibble(
+    Start = as.yearmon(c("Mar 2020", "May 2022")),
+    End   = as.yearmon(c("Jun 2020", "Dec 2022"))),
+  "Wide (Feb 2020-Jun 2021, Apr 2022-Dec 2023)" = tibble(
+    Start = as.yearmon(c("Feb 2020", "Apr 2022")),
+    End   = as.yearmon(c("Jun 2021", "Dec 2023")))
+)
+
+robust_row <- function(data, label) {
+  fit <- lm(formula(stress_lm), data = data)
+  base_fit <- lm(formula(improved_lm), data = data)
+  vc_hac <- sandwich::NeweyWest(fit, lag = hac_lag, prewhite = FALSE, adjust = TRUE)
+  ct <- lmtest::coeftest(fit, vcov. = vc_hac)
+  tibble(
+    Version = label,
+    N = nobs(fit),
+    Stress_Months = as.integer(sum(data$Stress)),
+    PSEi_x_Stress = ct["PSEI_return:Stress", 1],
+    PSEi_x_Stress_p = ct["PSEI_return:Stress", 4],
+    VIX_x_Stress = ct["VIX:Stress", 1],
+    VIX_x_Stress_p = ct["VIX:Stress", 4],
+    Y10_x_Stress = ct["PH_10Y_Yield:Stress", 1],
+    Y10_x_Stress_p = ct["PH_10Y_Yield:Stress", 4],
+    Joint_HAC_p = lmtest::waldtest(base_fit, fit, vcov = vc_hac, test = "F")$`Pr(>F)`[2],
+    Joint_OLS_p = anova(base_fit, fit)$`Pr(>F)`[2]
+  )
+}
+
+robustness_table <- bind_rows(
+  purrr::imap_dfr(stress_windows, function(periods, label) {
+    robust_row(
+      improved_data |> mutate(Stress = as.numeric(in_stress(diag_months, periods))),
+      label
+    )
+  }),
+  robust_row(advanced_data[!influence_table$Influential, ],
+             "Main definition, without Cook's distance months")
+)
+
+robustness_table |>
+  mutate(across(ends_with("_p"), ~ format.pval(.x, digits = 3, eps = 0.0001))) |>
+  flextable::flextable() |>
+  flextable::colformat_double(digits = 3)
+```
+
+```{r adv-beta-plot, fig.width = 8, fig.height = 5}
+# BDO against the market in calm and stress months, with a separate fitted line for each
+advanced_data |>
+  mutate(Period = if_else(Stress == 1, "Stress months", "Calm months")) |>
+  ggplot(aes(PSEI_return, BDO_return, shape = Period, linetype = Period)) +
+  geom_hline(yintercept = 0, colour = "grey80") +
+  geom_vline(xintercept = 0, colour = "grey80") +
+  geom_point(alpha = 0.7) +
+  geom_smooth(method = "lm", se = FALSE, colour = "black", formula = y ~ x) +
+  labs(
+    title = "BDO versus PSEi monthly log returns: calm and stress months",
+    subtitle = "Separate least-squares line for each regime; stress = Mar-Dec 2020 and May 2022-Oct 2023",
+    x = "PSEi monthly log return (%)", y = "BDO monthly log return (%)",
+    shape = NULL, linetype = NULL
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+## 4.7.5 Final Model Choice
+
+```{r adv-final-choice}
+tibble(
+  Criterion = c(
+    "Joint test of stress terms (HAC)",
+    "Change in market beta during stress",
+    "VIX x Stress significant (HAC) under every robustness version",
+    "AIC: improved vs. stress model",
+    "Final model carried into 4.8"
+  ),
+  Result = c(
+    sprintf("F = %.2f, p = %.3f", stress_joint$F[2], stress_joint$`Pr(>F)`[2]),
+    sprintf("%+.3f (p = %.3f)", regime_slopes$Difference[1], regime_slopes$Difference_p[1]),
+    if_else(all(robustness_table$VIX_x_Stress_p < inference_alpha), "Yes", "No"),
+    sprintf("%.2f vs. %.2f", AIC(improved_lm), AIC(stress_lm)),
+    "Improved model from 4.6 (winsorized manufacturing growth, Newey-West SEs)"
+  )
+) |>
+  flextable::flextable()
+```
+
+
+# 4.8 Financial Interpretation
+
+This section translates the final model (the improved model from 4.6) into quantities an investor would use: BDO's market beta, how much of its risk is market-driven, and what BDO's return looks like under different market scenarios. All returns are monthly log returns in percent.
+
+## 4.8.1 Market Beta
+
+A beta of 1 means BDO moves one-for-one with the PSEi. The test below checks whether BDO is more or less sensitive to the market than that.
+
+- **H0:** $\beta_{\text{PSEi}} = 1$ (BDO moves one-for-one with the market).
+- **H1:** $\beta_{\text{PSEi}} \neq 1$.
+
+```{r fin-beta}
+beta_hat <- coef(improved_lm)["PSEI_return"]
+beta_se  <- sqrt(improved_vcov["PSEI_return", "PSEI_return"])
+beta_t   <- (beta_hat - 1) / beta_se
+beta_p   <- 2 * pt(-abs(beta_t), df.residual(improved_lm))
+beta_ci  <- beta_hat + c(-1, 1) * qt(1 - inference_alpha / 2, df.residual(improved_lm)) * beta_se
+
+tibble(
+  Statistic = c("Beta estimate", "HAC standard error", "95% CI lower", "95% CI upper",
+                "t-statistic (H0: beta = 1)", "p-value (H0: beta = 1)", "Decision"),
+  Value = c(sprintf("%.4f", beta_hat), sprintf("%.4f", beta_se),
+            sprintf("%.4f", beta_ci[1]), sprintf("%.4f", beta_ci[2]),
+            sprintf("%.4f", beta_t), format.pval(beta_p, digits = 3, eps = 0.0001),
+            if_else(beta_p < inference_alpha,
+                    "Reject H0; beta differs from 1",
+                    "Fail to reject H0; beta is statistically indistinguishable from 1"))
+) |>
+  flextable::flextable()
+```
+
+## 4.8.2 Systematic versus Firm-Specific Risk
+
+BDO's total return variance is split into a market (systematic) part, $\hat\beta^2 \sigma^2_{\text{PSEi}}$, and a firm-specific (idiosyncratic) part, $\sigma^2_e$, using the market-only model on the same data. Monthly standard deviations are annualized by multiplying by $\sqrt{12}$.
+
+```{r fin-risk-decomposition}
+market_beta     <- coef(improved_market_lm)["PSEI_return"]
+total_var       <- var(improved_data$BDO_return)
+systematic_var  <- market_beta^2 * var(improved_data$PSEI_return)
+idiosyncratic_var <- var(residuals(improved_market_lm))
+
+tibble(
+  Component = c("Total BDO risk", "Systematic (market) risk", "Firm-specific risk"),
+  Monthly_Variance = c(total_var, systematic_var, idiosyncratic_var),
+  Share_of_Total_Pct = 100 * c(1, systematic_var / total_var, idiosyncratic_var / total_var),
+  Monthly_SD = sqrt(c(total_var, systematic_var, idiosyncratic_var)),
+  Annualized_SD = sqrt(12) * sqrt(c(total_var, systematic_var, idiosyncratic_var))
+) |>
+  flextable::flextable() |>
+  flextable::colformat_double(digits = 2)
+```
+
+## 4.8.3 Market Scenarios
+
+Expected BDO return for given PSEi monthly returns, holding the other eight factors at their sample means. The confidence interval reflects uncertainty in the estimated average response (HAC); the prediction interval adds the month-to-month noise an investor would actually experience.
+
+```{r fin-scenarios}
+scenario_pseis <- c(-10, -5, 0, 5, 10)
+
+scenario_grid <- improved_data |>
+  select(-all_of(dep_var)) |>
+  summarise(across(everything(), mean)) |>
+  slice(rep(1, length(scenario_pseis))) |>
+  mutate(PSEI_return = scenario_pseis)
+
+scenario_X  <- model.matrix(delete.response(terms(improved_lm)), scenario_grid)
+scenario_fit <- drop(scenario_X %*% coef(improved_lm))
+scenario_se  <- sqrt(rowSums((scenario_X %*% improved_vcov) * scenario_X))
+scenario_pse <- sqrt(scenario_se^2 + sigma(improved_lm)^2)
+t_crit <- qt(1 - inference_alpha / 2, df.residual(improved_lm))
+
+tibble(
+  PSEi_Return = scenario_pseis,
+  Expected_BDO_Return = scenario_fit,
+  CI_Lower = scenario_fit - t_crit * scenario_se,
+  CI_Upper = scenario_fit + t_crit * scenario_se,
+  PI_Lower = scenario_fit - t_crit * scenario_pse,
+  PI_Upper = scenario_fit + t_crit * scenario_pse
+) |>
+  flextable::flextable() |>
+  flextable::colformat_double(digits = 2)
+```
+
+## 4.8.4 Summary of Findings for the Decision-Maker
+
+```{r fin-summary}
+improved_results |>
+  filter(term != "(Intercept)") |>
+  left_join(factor_details |> select(term, Variable), by = "term") |>
+  transmute(
+    Factor = Variable,
+    Estimate = estimate,
+    HAC_p = p.value,
+    Significant_5pct = if_else(p.value < inference_alpha, "Yes", "No"),
+    Role = if_else(term == "PSEI_return",
+                   "Dominant driver: BDO tracks the market",
+                   "No reliable association beyond the market")
+  ) |>
+  mutate(HAC_p = format.pval(HAC_p, digits = 3, eps = 0.0001)) |>
+  flextable::flextable() |>
+  flextable::colformat_double(digits = 4)
+```
