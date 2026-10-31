@@ -942,3 +942,673 @@ criterion_summary |>
   flextable::flextable()
 ```
 
+
+
+
+
+
+# 4.5 Regression Diagnostics
+
+The tests in 4.3 and 4.4 rely on assumptions about the baseline model's errors (the part of BDO's return the model does not explain). This section checks those assumptions one at a time. Each check uses the full baseline model (`baseline_lm`) and the same 5% significance level as 4.3 (`inference_alpha`).
+
+```{r diag-setup}
+# Shared objects for the diagnostics
+diag_resid  <- residuals(baseline_lm)
+diag_fitted <- fitted(baseline_lm)
+diag_n      <- nobs(baseline_lm)
+diag_k      <- length(coef(baseline_lm)) - 1   # number of slopes (excludes the constant)
+
+# Month labels for the observations actually used in the model
+diag_months <- analysis_df |>
+  drop_na() |>
+  pull(month)
+
+stopifnot(length(diag_months) == diag_n)
+
+regressor_names <- setdiff(names(coef(baseline_lm)), "(Intercept)")
+```
+
+
+## 4.5.1 Multicollinearity
+
+Multicollinearity happens when two or more factors move closely together, so the model cannot separate their individual effects. It does not bias the estimates, but it widens their standard errors.
+
+- **Correlation matrix:** Pairwise correlations between factors. Values close to +1 or -1 are a warning sign.
+- **Variance Inflation Factor (VIF):** How much a coefficient's variance is inflated because that factor can be predicted from the other factors. VIF = 1 / (1 - R²), where R² comes from regressing that factor on all the other factors. A VIF above 5 is a concern and above 10 is serious.
+
+```{r diag-correlation}
+# Pairwise correlations between the regressors only
+regressor_correlations <- model_data |>
+  select(all_of(regressor_names)) |>
+  cor()
+
+regressor_correlations |>
+  round(2) |>
+  as.data.frame() |>
+  rownames_to_column("Variable") |>
+  flextable::flextable()
+
+# Largest absolute pairwise correlation
+correlation_pairs <- regressor_correlations |>
+  as.data.frame() |>
+  rownames_to_column("Variable_1") |>
+  pivot_longer(-Variable_1, names_to = "Variable_2", values_to = "Correlation") |>
+  filter(Variable_1 < Variable_2) |>
+  arrange(desc(abs(Correlation)))
+
+correlation_pairs |>
+  head(5) |>
+  flextable::flextable()
+```
+
+```{r diag-correlation-heatmap, fig.width = 8, fig.height = 6}
+regressor_correlations |>
+  as.data.frame() |>
+  rownames_to_column("Variable_1") |>
+  pivot_longer(-Variable_1, names_to = "Variable_2", values_to = "Correlation") |>
+  ggplot(aes(Variable_1, Variable_2, fill = Correlation)) +
+  geom_tile(colour = "white") +
+  geom_text(aes(label = round(Correlation, 2)), size = 3) +
+  scale_fill_gradient2(low = "grey30", mid = "white", high = "grey30",
+                       midpoint = 0, limits = c(-1, 1)) +
+  labs(title = "Correlation between regressors", x = NULL, y = NULL) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r diag-vif}
+# VIF computed directly: regress each factor on all the other factors
+vif_results <- tibble(term = regressor_names) |>
+  mutate(
+    Auxiliary_R2 = vapply(
+      term,
+      function(variable) {
+        others <- setdiff(regressor_names, variable)
+        summary(lm(reformulate(others, response = variable), data = model_data))$r.squared
+      },
+      numeric(1)
+    ),
+    VIF = 1 / (1 - Auxiliary_R2),
+    Assessment = case_when(
+      VIF > 10 ~ "Serious multicollinearity",
+      VIF > 5  ~ "Moderate concern",
+      TRUE     ~ "No concern"
+    )
+  )
+
+vif_results |>
+  flextable::flextable()
+```
+
+
+## 4.5.2 Heteroskedasticity
+
+Heteroskedasticity means the spread of the errors changes across observations, for example larger errors in volatile months. The coefficients stay unbiased, but the usual standard errors, and so the p-values and confidence intervals in 4.3, can be wrong.
+
+- **Residuals vs. fitted plot:** If the spread of points widens or narrows as fitted values change, that suggests heteroskedasticity.
+- **Breusch-Pagan test:** Regresses the squared residuals on the factors. H0: the error variance is constant (homoskedastic). H1: the error variance depends on the factors.
+- **White test:** Same idea, but also includes the squared factors, so it can detect non-linear patterns in the variance.
+
+```{r diag-resid-fitted, fig.width = 7, fig.height = 4.5}
+tibble(Fitted = diag_fitted, Residual = diag_resid) |>
+  ggplot(aes(Fitted, Residual)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_point() +
+  geom_smooth(method = "loess", se = FALSE, colour = "black", linewidth = 0.6) +
+  labs(title = "Residuals vs. fitted values",
+       x = "Fitted BDO return (percentage points)",
+       y = "Residual (percentage points)") +
+  theme_minimal()
+```
+
+```{r diag-heteroskedasticity}
+# Breusch-Pagan: squared residuals on the original factors
+bp_test <- lmtest::bptest(baseline_lm)
+
+# White test: squared residuals on the factors and their squares
+white_formula <- as.formula(paste(
+  "~", paste(regressor_names, collapse = " + "), "+",
+  paste0("I(", regressor_names, "^2)", collapse = " + ")
+))
+white_test <- lmtest::bptest(baseline_lm, white_formula, data = model_data)
+
+heteroskedasticity_results <- tibble(
+  Test = c("Breusch-Pagan", "White (with squared terms)"),
+  Statistic = c(unname(bp_test$statistic), unname(white_test$statistic)),
+  DF = c(unname(bp_test$parameter), unname(white_test$parameter)),
+  p.value = c(bp_test$p.value, white_test$p.value)
+) |>
+  mutate(
+    Decision = if_else(
+      p.value < inference_alpha,
+      "Reject H0; evidence of heteroskedasticity",
+      "Fail to reject H0; no evidence of heteroskedasticity"
+    )
+  )
+
+heteroskedasticity_results |>
+  mutate(p.value = format.pval(p.value, digits = 3, eps = 0.0001)) |>
+  flextable::flextable()
+```
+
+
+## 4.5.3 Autocorrelation
+
+The data are monthly, so this month's error may be related to last month's error. If so, the usual standard errors are again unreliable.
+
+- **Residuals over time and ACF plot:** The ACF (autocorrelation function) shows the correlation between residuals and their own past values. Bars outside the dashed bands suggest autocorrelation at that lag.
+- **Durbin-Watson test:** Checks for first-order autocorrelation (this month vs. last month). A value near 2 means no autocorrelation.
+- **Breusch-Godfrey test:** Checks for autocorrelation at several lags at once. Lag 1 and lag 12 (one year of monthly data) are tested. H0: no autocorrelation up to that lag. H1: some autocorrelation exists.
+
+```{r diag-resid-time, fig.width = 8, fig.height = 4}
+tibble(Month = as.Date(diag_months), Residual = diag_resid) |>
+  ggplot(aes(Month, Residual)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_line() +
+  geom_point(size = 1) +
+  labs(title = "Baseline residuals over time",
+       x = NULL, y = "Residual (percentage points)") +
+  theme_minimal()
+```
+
+```{r diag-acf, fig.width = 7, fig.height = 4}
+acf(diag_resid, lag.max = 24, main = "ACF of baseline residuals")
+```
+
+```{r diag-autocorrelation}
+dw_test   <- lmtest::dwtest(baseline_lm, alternative = "two.sided")
+bg_test_1 <- lmtest::bgtest(baseline_lm, order = 1)
+bg_test_12 <- lmtest::bgtest(baseline_lm, order = 12)
+
+autocorrelation_results <- tibble(
+  Test = c("Durbin-Watson (first order)",
+           "Breusch-Godfrey (up to lag 1)",
+           "Breusch-Godfrey (up to lag 12)"),
+  Statistic = c(unname(dw_test$statistic),
+                unname(bg_test_1$statistic),
+                unname(bg_test_12$statistic)),
+  p.value = c(dw_test$p.value, bg_test_1$p.value, bg_test_12$p.value)
+) |>
+  mutate(
+    Decision = if_else(
+      p.value < inference_alpha,
+      "Reject H0; evidence of autocorrelation",
+      "Fail to reject H0; no evidence of autocorrelation"
+    )
+  )
+
+autocorrelation_results |>
+  mutate(p.value = format.pval(p.value, digits = 3, eps = 0.0001)) |>
+  flextable::flextable()
+```
+
+
+## 4.5.4 Outliers and Influential Observations
+
+Some months may be unusual enough to pull the estimated coefficients toward them. Three measures are used:
+
+- **Studentized residual:** How far a month's actual return is from the model's fit, in standard-error units. Values beyond 2 in absolute value are unusual; beyond 3 are outliers.
+- **Leverage (hat value):** How unusual a month's factor values are compared with the rest of the sample. Values above 2(k + 1)/n are high, where k is the number of slopes and n the number of months.
+- **Cook's distance:** Combines both, measuring how much all coefficients would change if that month were removed. Values above 4/n are flagged.
+
+```{r diag-influence}
+leverage_cutoff <- 2 * (diag_k + 1) / diag_n
+cooks_cutoff    <- 4 / diag_n
+
+influence_table <- tibble(
+  Month = format(diag_months),
+  BDO_Return = model_data[[dep_var]],
+  Studentized_Residual = rstudent(baseline_lm),
+  Leverage = hatvalues(baseline_lm),
+  Cooks_Distance = cooks.distance(baseline_lm)
+) |>
+  mutate(
+    Large_Residual = abs(Studentized_Residual) > 2,
+    High_Leverage  = Leverage > leverage_cutoff,
+    Influential    = Cooks_Distance > cooks_cutoff
+  )
+
+tibble(
+  Measure = c("Studentized residual beyond 2 in absolute value",
+              "Leverage above 2(k + 1)/n",
+              "Cook's distance above 4/n"),
+  Cutoff = c(2, leverage_cutoff, cooks_cutoff),
+  Months_Flagged = c(sum(influence_table$Large_Residual),
+                     sum(influence_table$High_Leverage),
+                     sum(influence_table$Influential))
+) |>
+  flextable::flextable()
+
+# Every month flagged by at least one measure, most influential first
+flagged_months <- influence_table |>
+  filter(Large_Residual | High_Leverage | Influential) |>
+  arrange(desc(Cooks_Distance))
+
+flagged_months |>
+  flextable::flextable()
+```
+
+```{r diag-cooks-plot, fig.width = 8, fig.height = 4}
+influence_table |>
+  mutate(Month = as.Date(diag_months)) |>
+  ggplot(aes(Month, Cooks_Distance)) +
+  geom_col(width = 20, fill = "grey40") +
+  geom_hline(yintercept = cooks_cutoff, linetype = "dashed") +
+  geom_text(
+    data = ~ filter(.x, Influential),
+    aes(label = format(as.yearmon(Month))),
+    vjust = -0.4, size = 3
+  ) +
+  labs(title = "Cook's distance by month",
+       subtitle = "Dashed line: 4/n cutoff",
+       x = NULL, y = "Cook's distance") +
+  theme_minimal()
+```
+
+The flagged months can be linked to known events, for example the COVID-19 lockdowns in 2020 and the 2022 rate-hiking cycle. The manufacturing growth variable is checked separately, because year-over-year growth produces extreme values when the comparison month was itself abnormal (a base effect).
+
+```{r diag-manufacturing-extremes}
+# Year-over-year manufacturing growth: months with extreme readings
+model_data |>
+  mutate(Month = format(diag_months)) |>
+  filter(abs(manafactuting_prod_growth) > 40) |>
+  select(Month, manafactuting_prod_growth) |>
+  flextable::flextable()
+```
+
+```{r diag-manufacturing-plot, fig.width = 8, fig.height = 4}
+tibble(Month = as.Date(diag_months),
+       Manufacturing_YoY = model_data$manafactuting_prod_growth) |>
+  ggplot(aes(Month, Manufacturing_YoY)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_line() +
+  geom_point(size = 1) +
+  labs(title = "Manufacturing production growth (YoY %)",
+       x = NULL, y = "YoY growth (%)") +
+  theme_minimal()
+```
+
+
+## 4.5.5 Residual Diagnostics
+
+Two more checks on the residuals:
+
+- **Normality:** The t-tests and F-tests in 4.3 assume normally distributed errors. This matters less in larger samples, but with 96 months it is still worth checking. The Q-Q plot compares the residuals with a normal distribution; points on the line mean the residuals look normal. Shapiro-Wilk and Jarque-Bera (based on skewness and kurtosis) test H0: the residuals are normally distributed.
+- **Functional form (Ramsey RESET):** Checks whether adding squared and cubed fitted values improves the model. H0: the linear form is adequate. H1: the model is missing a non-linear relationship.
+
+```{r diag-qq, fig.width = 6, fig.height = 4.5}
+tibble(Residual = diag_resid) |>
+  ggplot(aes(sample = Residual)) +
+  stat_qq() +
+  stat_qq_line() +
+  labs(title = "Normal Q-Q plot of baseline residuals",
+       x = "Theoretical quantiles", y = "Sample quantiles") +
+  theme_minimal()
+```
+
+```{r diag-residual-tests}
+shapiro_result <- shapiro.test(diag_resid)
+
+# Jarque-Bera computed directly from skewness and excess kurtosis
+jb_skew <- mean((diag_resid - mean(diag_resid))^3) / mean((diag_resid - mean(diag_resid))^2)^1.5
+jb_kurt <- mean((diag_resid - mean(diag_resid))^4) / mean((diag_resid - mean(diag_resid))^2)^2
+jb_stat <- diag_n / 6 * (jb_skew^2 + (jb_kurt - 3)^2 / 4)
+jb_p    <- pchisq(jb_stat, df = 2, lower.tail = FALSE)
+
+reset_result <- lmtest::resettest(baseline_lm, power = 2:3, type = "fitted")
+
+residual_test_results <- tibble(
+  Test = c("Shapiro-Wilk (normality)",
+           "Jarque-Bera (normality)",
+           "Ramsey RESET (functional form)"),
+  Statistic = c(unname(shapiro_result$statistic), jb_stat,
+                unname(reset_result$statistic)),
+  p.value = c(shapiro_result$p.value, jb_p, reset_result$p.value)
+) |>
+  mutate(
+    Decision = case_when(
+      str_detect(Test, "RESET") & p.value < inference_alpha ~
+        "Reject H0; evidence of a missing non-linear relationship",
+      str_detect(Test, "RESET") ~
+        "Fail to reject H0; linear form is adequate",
+      p.value < inference_alpha ~
+        "Reject H0; residuals are not normal",
+      TRUE ~
+        "Fail to reject H0; no evidence against normality"
+    )
+  )
+
+residual_test_results |>
+  mutate(p.value = format.pval(p.value, digits = 3, eps = 0.0001)) |>
+  flextable::flextable()
+
+tibble(Skewness = jb_skew, Kurtosis = jb_kurt) |>
+  flextable::flextable()
+```
+
+
+## 4.5.6 Summary of Diagnostic Findings
+
+```{r diag-summary}
+diagnostic_summary <- tibble(
+  Issue = c("Multicollinearity",
+            "Heteroskedasticity",
+            "Autocorrelation",
+            "Outliers / influential months",
+            "Normality of residuals",
+            "Functional form"),
+  Evidence = c(
+    sprintf("Max VIF = %.2f; max |correlation| = %.2f",
+            max(vif_results$VIF), max(abs(correlation_pairs$Correlation))),
+    sprintf("Breusch-Pagan p = %.3f; White p = %.3f",
+            bp_test$p.value, white_test$p.value),
+    sprintf("DW = %.2f; BG(1) p = %.3f; BG(12) p = %.3f",
+            dw_test$statistic, bg_test_1$p.value, bg_test_12$p.value),
+    sprintf("%d months above Cook's 4/n; %d high-leverage months",
+            sum(influence_table$Influential), sum(influence_table$High_Leverage)),
+    sprintf("Shapiro-Wilk p = %.3f; Jarque-Bera p = %.3f",
+            shapiro_result$p.value, jb_p),
+    sprintf("RESET p = %.3f", reset_result$p.value)
+  ),
+  Problem_Detected = c(
+    if_else(max(vif_results$VIF) > 5, "Yes", "No"),
+    if_else(min(bp_test$p.value, white_test$p.value) < inference_alpha, "Yes", "No"),
+    if_else(min(dw_test$p.value, bg_test_1$p.value, bg_test_12$p.value) < inference_alpha, "Yes", "No"),
+    if_else(sum(influence_table$Influential) > 0, "Yes", "No"),
+    if_else(min(shapiro_result$p.value, jb_p) < inference_alpha, "Yes", "No"),
+    if_else(reset_result$p.value < inference_alpha, "Yes", "No")
+  )
+)
+
+diagnostic_summary |>
+  flextable::flextable()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# 4.6 Model Improvement
+
+This section responds to the problems found in 4.5. Each remedy is applied only where the diagnostics or the data justify it, and the improved model is then compared with the baseline.
+
+
+## 4.6.1 Problems Addressed and Remedies
+
+```{r improve-plan}
+tibble(
+  Problem = c(
+    "Extreme manufacturing growth values (base effects from the 2020 lockdowns)",
+    "Influential crisis months (Cook's distance above 4/n)",
+    "Standard errors may be affected by heteroskedasticity or autocorrelation the tests could not detect"
+  ),
+  Remedy = c(
+    "Winsorize manufacturing growth at its 5th and 95th percentiles",
+    "Keep the months in the model; refit without them as a sensitivity check",
+    "Report Newey-West (HAC) robust standard errors"
+  ),
+  Why = c(
+    sprintf("Readings as high as %+.0f%% reflect a collapsed 2020 base, not real expansion, and raise the leverage of the 2021 months that carry them",
+            max(model_data$manafactuting_prod_growth)),
+    "They are real market events (e.g., COVID-19, 2022 rate hikes); deleting them would hide risk an investor actually faces",
+    "HAC standard errors stay valid whether or not these problems are present, so inference does not depend on the tests having enough power with 96 months"
+  )
+) |>
+  flextable::flextable()
+```
+
+
+## 4.6.2 Remedy 1: Winsorizing Manufacturing Growth
+
+Winsorizing replaces values below the 5th percentile with the 5th percentile, and values above the 95th percentile with the 95th percentile. The month stays in the sample; only its extreme value is capped.
+
+```{r improve-winsorize}
+manufacturing_limits <- quantile(
+  model_data$manafactuting_prod_growth,
+  probs = c(0.05, 0.95)
+)
+
+improved_data <- model_data |>
+  mutate(
+    manafactuting_prod_growth = pmin(
+      pmax(manafactuting_prod_growth, manufacturing_limits[1]),
+      manufacturing_limits[2]
+    )
+  )
+
+tibble(
+  Statistic = c("5th percentile cap", "95th percentile cap",
+                "Months capped", "Original min", "Original max",
+                "Winsorized min", "Winsorized max"),
+  Value = c(manufacturing_limits[1], manufacturing_limits[2],
+            sum(model_data$manafactuting_prod_growth != improved_data$manafactuting_prod_growth),
+            min(model_data$manafactuting_prod_growth), max(model_data$manafactuting_prod_growth),
+            min(improved_data$manafactuting_prod_growth), max(improved_data$manafactuting_prod_growth))
+) |>
+  flextable::flextable()
+
+improved_lm <- lm(reformulate(".", response = dep_var), data = improved_data)
+```
+
+The table below shows how capping changes the leverage of the months whose manufacturing value was capped.
+
+```{r improve-winsorize-leverage}
+tibble(
+  Month = format(diag_months),
+  Original_Value = model_data$manafactuting_prod_growth,
+  Winsorized_Value = improved_data$manafactuting_prod_growth,
+  Leverage_Before = hatvalues(baseline_lm),
+  Leverage_After = hatvalues(improved_lm)
+) |>
+  filter(Original_Value != Winsorized_Value) |>
+  mutate(Above_Cutoff_After = Leverage_After > leverage_cutoff) |>
+  flextable::flextable()
+```
+
+
+## 4.6.3 Remedy 2: Newey-West (HAC) Robust Standard Errors
+
+Newey-West standard errors adjust for both heteroskedasticity and autocorrelation (HAC). They do not change the coefficient estimates, only their standard errors, t-statistics and p-values. The number of lags follows the common rule of thumb floor(4(n/100)^(2/9)).
+
+```{r improve-hac}
+hac_lag <- floor(4 * (nobs(improved_lm) / 100)^(2 / 9))
+
+improved_vcov <- sandwich::NeweyWest(
+  improved_lm,
+  lag = hac_lag,
+  prewhite = FALSE,
+  adjust = TRUE
+)
+
+improved_results <- lmtest::coeftest(improved_lm, vcov. = improved_vcov) |>
+  broom::tidy() |>
+  left_join(
+    lmtest::coefci(improved_lm, vcov. = improved_vcov, level = 1 - inference_alpha) |>
+      as.data.frame() |>
+      rownames_to_column("term") |>
+      setNames(c("term", "conf.low", "conf.high")),
+    by = "term"
+  ) |>
+  mutate(
+    Decision = if_else(
+      p.value < inference_alpha,
+      "Reject H0; evidence of a linear association",
+      "Fail to reject H0; insufficient evidence"
+    )
+  )
+
+tibble(Setting = "Newey-West lags", Value = hac_lag) |>
+  flextable::flextable()
+
+improved_results |>
+  mutate(p.value = format.pval(p.value, digits = 3, eps = 0.0001)) |>
+  flextable::flextable()
+```
+
+```{r improve-hac-joint}
+# Joint test: do the eight non-PSEi factors add information, using HAC standard errors?
+improved_market_lm <- lm(BDO_return ~ PSEI_return, data = improved_data)
+
+hac_joint_test <- lmtest::waldtest(
+  improved_market_lm,
+  improved_lm,
+  vcov = improved_vcov,
+  test = "F"
+)
+
+tibble(
+  Test = "Eight non-PSEi factors jointly zero (HAC)",
+  F_Statistic = hac_joint_test$F[2],
+  Numerator_DF = abs(hac_joint_test$Df[2]),
+  p.value = hac_joint_test$`Pr(>F)`[2]
+) |>
+  mutate(
+    Decision = if_else(
+      p.value < inference_alpha,
+      "Reject H0; the group adds explanatory information",
+      "Fail to reject H0; insufficient evidence the group adds information"
+    ),
+    p.value = format.pval(p.value, digits = 3, eps = 0.0001)
+  ) |>
+  flextable::flextable()
+```
+
+
+## 4.6.4 Remedy 3: Sensitivity to Influential Months
+
+The improved model is refit without the months flagged by Cook's distance in 4.5.4. If the main conclusions hold without them, the results do not depend on a few unusual months.
+
+```{r improve-sensitivity}
+influential_months <- influence_table |>
+  filter(Influential) |>
+  pull(Month)
+
+sensitivity_lm <- lm(
+  reformulate(".", response = dep_var),
+  data = improved_data[!influence_table$Influential, ]
+)
+
+tibble(Months_Removed = paste(influential_months, collapse = ", "),
+       Observations_Left = nobs(sensitivity_lm)) |>
+  flextable::flextable()
+```
+
+
+## 4.6.5 Baseline vs. Improved Model
+
+The table compares each coefficient across three versions:
+
+- **Baseline:** Original model with ordinary (OLS) standard errors, as in 4.3.
+- **Improved:** Winsorized manufacturing growth with Newey-West standard errors.
+- **Without influential months:** Improved specification refit without the Cook's distance months, with Newey-West standard errors.
+
+```{r improve-comparison}
+tidy_with_vcov <- function(fit, vcov_matrix, label) {
+  lmtest::coeftest(fit, vcov. = vcov_matrix) |>
+    broom::tidy() |>
+    transmute(
+      term,
+      !!paste0(label, "_Estimate") := estimate,
+      !!paste0(label, "_SE")       := std.error,
+      !!paste0(label, "_p")        := p.value
+    )
+}
+
+sensitivity_vcov <- sandwich::NeweyWest(
+  sensitivity_lm, lag = hac_lag, prewhite = FALSE, adjust = TRUE
+)
+
+coefficient_comparison <- tidy_with_vcov(baseline_lm, vcov(baseline_lm), "Baseline") |>
+  left_join(tidy_with_vcov(improved_lm, improved_vcov, "Improved"), by = "term") |>
+  left_join(tidy_with_vcov(sensitivity_lm, sensitivity_vcov, "NoInfluential"), by = "term") |>
+  mutate(
+    Same_Sign = sign(Baseline_Estimate) == sign(Improved_Estimate) &
+                sign(Improved_Estimate) == sign(NoInfluential_Estimate),
+    Same_5pct_Decision = (Baseline_p < inference_alpha) == (Improved_p < inference_alpha) &
+                         (Improved_p < inference_alpha) == (NoInfluential_p < inference_alpha)
+  )
+
+coefficient_comparison |>
+  mutate(across(ends_with("_p"), ~ format.pval(.x, digits = 3, eps = 0.0001))) |>
+  flextable::flextable()
+```
+
+```{r improve-fit-comparison}
+fit_summary <- function(fit, label) {
+  tibble(
+    Model = label,
+    N = nobs(fit),
+    R_Squared = summary(fit)$r.squared,
+    Adjusted_R_Squared = summary(fit)$adj.r.squared,
+    AIC = AIC(fit),
+    BIC = BIC(fit),
+    Max_Leverage = max(hatvalues(fit)),
+    Breusch_Pagan_p = lmtest::bptest(fit)$p.value,
+    Breusch_Godfrey_12_p = lmtest::bgtest(fit, order = 12)$p.value
+  )
+}
+
+bind_rows(
+  fit_summary(baseline_lm, "Baseline"),
+  fit_summary(improved_lm, "Improved"),
+  fit_summary(sensitivity_lm, "Without influential months")
+) |>
+  flextable::flextable()
+```
+
+AIC and BIC for the model without influential months are not comparable with the other two, because it uses fewer observations. R-squared and fit measures are reported for completeness; the improved model is not chosen for a higher R-squared but because its inference is more reliable.
+
+```{r improve-coef-plot, fig.width = 8, fig.height = 5}
+# Coefficients with 95% confidence intervals: baseline (OLS) vs. improved (HAC)
+bind_rows(
+  broom::tidy(baseline_lm, conf.int = TRUE, conf.level = 1 - inference_alpha) |>
+    mutate(Model = "Baseline (OLS SE)"),
+  improved_results |>
+    mutate(Model = "Improved (HAC SE)")
+) |>
+  filter(term != "(Intercept)") |>
+  group_by(term) |>
+  mutate(scale = max(abs(c(conf.low, conf.high)))) |>
+  ungroup() |>
+  mutate(across(c(estimate, conf.low, conf.high), ~ .x / scale)) |>
+  ggplot(aes(estimate, term, shape = Model)) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_pointrange(aes(xmin = conf.low, xmax = conf.high),
+                  position = position_dodge(width = 0.5)) +
+  labs(title = "Coefficient estimates and 95% confidence intervals",
+       subtitle = "Each factor rescaled by its largest interval bound so all fit on one axis",
+       x = "Scaled estimate", y = NULL, shape = NULL) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+```{r improve-summary}
+tibble(
+  Check = c(
+    "Coefficients that keep the same sign across all three versions",
+    "Coefficients with the same 5% decision across all three versions",
+    "Factors significant at 5% in the improved model (HAC)"
+  ),
+  Result = c(
+    sprintf("%d of %d", sum(coefficient_comparison$Same_Sign), nrow(coefficient_comparison)),
+    sprintf("%d of %d", sum(coefficient_comparison$Same_5pct_Decision), nrow(coefficient_comparison)),
+    improved_results |>
+      filter(term != "(Intercept)", p.value < inference_alpha) |>
+      pull(term) |>
+      paste(collapse = ", ")
+  )
+) |>
+  flextable::flextable()
+```
