@@ -315,7 +315,7 @@ view(analysis_df)
 
 # Section 2 — Baseline Multiple Linear Regression
 
-A single baseline model using every available column as a regressor (M3 excluded), fitted on the full sample. Only its fit is reported here.
+A single baseline model using every available column as a regressor (M3 excluded), fitted on the full sample.
 
 ```{r baseline-lm}
 dep_var <- "BDO_return"   # dependent variable: BDO monthly log return (column name in the local CSV)
