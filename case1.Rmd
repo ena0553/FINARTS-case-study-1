@@ -1,5 +1,5 @@
 ---
-title: "Group Case 1 — BDO Unibank (BDO): Data Download & Transformation Setup"
+title: "Group Case 1 — BDO Unibank (BDO) Comprehensive Financial Regression Analysis"
 subtitle: "Preparing the Monthly Research Dataset for Baseline Multiple Linear Regression"
 author: "FINARTS C01 — Group 1"
 date: "`r Sys.Date()`"
@@ -9,7 +9,6 @@ output:
     toc_depth: 2
     toc_float: true
     number_sections: false
-    code_folding: show
   pdf_document:
     toc: true
     toc_depth: 2
@@ -29,21 +28,16 @@ knitr::opts_chunk$set(
 
 options(xts.warn_dplyr_breaks_lag = FALSE)
 
-suppressWarnings(
-  suppressPackageStartupMessages({
-    library(tidyverse)
-    library(quantmod)
-    library(lubridate)
-    library(flextable)
-    library(broom)
-    library(scales)
-    library(zoo)
-    library(lmtest)
-    library(sandwich)
-  })
-)
+library(tidyverse)
+library(quantmod)
+library(lubridate)
+library(flextable)
+library(broom)
+library(scales)
+library(zoo)
+library(lmtest)
+library(sandwich)
 
-# Use full available width for HTML flextables
 flextable::set_flextable_defaults(
   post_process_html = function(ft) {
     flextable::set_table_properties(
@@ -90,54 +84,51 @@ research_flextable <- function(x) {
 
 
 ```{r parameters}
-# Download one month early: the January 2018 log change needs December 2017 as its base
+# Download from December 2017 in order to properly compute January 2018 values
 download_from <- as.Date("2017-12-01")
 download_to   <- as.Date("2025-12-31")
 
-# Estimation sample (monthly)
+# The sample itself runs from 2018-2025
 sample_start <- as.Date("2018-01-01")
 sample_end   <- as.Date("2025-12-01")
 
-# Local file holding BDO, PSEi and the BSP / PSA monthly series (already transformed)
+# Local file containing the other variables needed for later analysis. This is pre-transformed in Google Sheets for convenience (more details to follow)
 local_file <- file.path("local_data.csv")
 ```
 
-# Section 4 — The Candidate Regressors and Their Required Transformations
+# Section 1 — Data Understanding and Preparation
+
+## Section 1.1 - Candidate Regressors
 
 This table reproduces the case brief. The **Source route** column determines whether a series is downloaded automatically or imported from the local file.
 
 ```{r variable-dictionary}
 variable_dictionary <- tribble(
   ~`#`, ~Candidate_Regressor,                 ~Dataset_Code,                  ~Transformation,           ~Source,                        ~Route,
-  0,    "BDO monthly log return (DEPENDENT)", "BDO_Return",                   "Monthly log return",      "Local CSV (price history)",    "Local CSV",
-  1,    "PSEi return",                        "PSEi_Return",                  "Monthly log return",      "Local CSV (price history)",    "Local CSV",
+  0,    "BDO return (DEPENDENT)", "BDO_Return",                   "Monthly log return",      "Investing.com (price history)",    "Local CSV",
+  1,    "PSEi return",                        "PSEi_Return",                  "Monthly log return",      "Investing.com (price history)",    "Local CSV",
   2,    "BSP RRP rate change",                "BSP_RRP_Change",               "Month-end first difference", "BSP",                         "Local CSV",
-  3,    "PH 10Y gov't-yield change",          "PH_10Y_Change",                "Month-end first difference", "Instructor-supplied",         "Local CSV",
-  4,    "USD/PHP change",                     "USD_PHP_Change",               "Monthly log change",      "BSP monthly FX / Yahoo (PHP=X)", "Download",
-  5,    "CPI inflation",                      "PH_CPI_YoY",                   "YoY % change",            "PSA OpenSTAT",                 "Local CSV",
-  6,    "M3 growth",                          "PH_M3_YoY",                    "YoY % growth",            "BSP Domestic Liquidity",       "Omitted (no data)",
-  7,    "OFW remittance growth",              "PH_OFW_Remittances_YoY",       "YoY % growth",            "BSP OF remittances",           "Local CSV",
+  3,    "PH 10Y gov't-yield change",          "PH_10Y_Change",                "Month-end first difference", "Investing.com",         "Local CSV",
+  4,    "USD/PHP change",                     "USD_PHP_Change",               "Monthly log change",      "BSP monthly FX / Yahoo (PHP=X)", "Download via GetSymbols",
+  5,    "CPI inflation",                      "PH_CPI_YoY",                   "YoY % change",            "PSA",                 "Local CSV",
+  6,    "M3 growth",                          "PH_M3_YoY",                    "YoY % growth",            "---",       "Omitted",
+  7,    "OFW remittance growth",              "PH_OFW_Remittances_YoY",       "YoY % growth",            "BSP",           "Local CSV",
   8,    "Manufacturing-production growth",    "PH_Manufacturing_Production_YoY", "YoY % growth",         "PSA MISSI",                    "Local CSV",
-  9,    "WTI return",                         "WTI_Return",                   "Monthly log return",      "FRED DCOILWTICO",              "Download",
-  10,   "VIX",                                "VIX",                          "Monthly average",         "FRED VIXCLS",                  "Download"
+  9,    "WTI return",                         "WTI_Return",                   "Monthly log return",      "FRED DCOILWTICO",              "Download via GetSymbols",
+  10,   "VIX",                                "VIX",                          "Monthly average",         "FRED VIXCLS",                  "Download via GetSymbols"
 )
 
 variable_dictionary |>
   research_flextable()
 ```
 
-**Units to keep in mind before interpreting any coefficient later:**
+The time range for all candidate regressors spans from January 1, 2018, until December 31, 2025. However, for regressors where a Year-on-Year growth transformation is required, 2017 data was used to compute for 2018 values. 
 
-- Returns and log changes (`BDO_Return`, `PSEi_Return`, `USD_PHP_Change`, `WTI_Return`) are in **decimals** (0.01 = 1%).
-  The local CSV stores `BDO_return` and `PSEI_return` in **percent**, so they are divided by 100 on import to match.
-- Rate and yield changes (`BSP_RRP_Change`, `PH_10Y_Change`) are in **percentage points**.
-- Year-over-year variables (`*_YoY`) are in **percent** (5 = 5%).
-- `VIX` is an **index level**.
-- `USD_PHP_Change > 0` means the **peso depreciated** (more PHP per USD).
+Due to inconsistency in pulling data from the API, the monthly log returns for PSEi were instead computed from raw data taken from Investing.com. Additionally, due to a difficulty in procuring consistent, tabular M3 growth data in the Philippines (official reports from the BSP typically only displayed them in graphical form), the regressor was ommitted from the model.
 
-# Section 5 — Download USD/PHP from Yahoo Finance
+## Section 1.2 — Downloading USD/PHP from Yahoo Finance
 
-BDO and the PSEi now come from the local CSV (Section 9). Only USD/PHP is still downloaded from Yahoo Finance. The helper below returns `NULL` (instead of crashing the whole document) if a download fails, so the problem is easy to diagnose.
+Since BDO and PSEi data are taken from a local file, only USD/PHP is still downloaded from Yahoo Finance. The helper below returns `NULL` (instead of crashing the whole document) if a download fails, so the problem is easy to diagnose.
 
 ```{r yahoo-download}
 safe_get <- function(symbol, src) {
@@ -154,7 +145,7 @@ safe_get <- function(symbol, src) {
   )
 }
 
-# Use the adjusted close when it exists (equities); otherwise the close (index, FX).
+# Use the adjusted close when it exists (equities); otherwise the close (index, FX)
 price_series <- function(x) {
   if (is.null(x)) return(NULL)
   if (has.Ad(x)) Ad(x) else Cl(x)
@@ -164,42 +155,18 @@ usdphp_raw <- safe_get("PHP=X", "yahoo")   # USD/PHP exchange rate (PHP per USD)
 usdphp_px  <- price_series(usdphp_raw)
 ```
 
-# Section 6 — Download Global Variables from FRED
+## Section 1.3 — Download Global Variables from FRED
+
+Using the safe_get function defined in the previous code block, we download the VIX and RTI raw data.
 
 ```{r fred-download}
 vix_raw <- safe_get("VIXCLS",      "FRED")   # CBOE VIX, daily close
 wti_raw <- safe_get("DCOILWTICO",  "FRED")   # WTI crude oil, daily spot
 ```
 
-# Section 7 — Inspect Frequencies and Timing
+## Section 1.4 — Convert the Downloaded Series to a Common Monthly Key
 
-The series do not arrive at the same frequency or on the same dates. Aligning them correctly is part of the research design.
-
-```{r frequency-inspection}
-tibble(
-  Series = c("PHP=X", "VIXCLS", "DCOILWTICO",
-             "BDO", "PSEi", "BSP RRP rate", "PH 10Y yield", "PH CPI",
-             "OFW remittances", "Manufacturing production"),
-  Source = c(rep("Download", 3), rep("Local CSV", 7)),
-  Monthly_Rule = c("Monthly average", "Monthly average", "Monthly average",
-                   "Already monthly (log return)", "Already monthly (log return)",
-                   "Already monthly (first difference)", "Already monthly (first difference)",
-                   "Already monthly (YoY %)", "Already monthly (YoY %)",
-                   "Already monthly (YoY %)")
-) |>
-  cobalt_kable(caption = "Source and Monthly Aggregation Rule")
-```
-
-**Why these rules?**
-
-- USD/PHP: BSP publishes **monthly average** exchange rates, so the monthly average of daily quotes is the closest match.
-- VIX and WTI: **monthly average**, as specified in the brief.
-- BDO, PSEi, the policy rate and yield, CPI, remittances and manufacturing arrive in the local CSV already as monthly returns, first differences or YoY rates.
-- M3 growth is omitted because no usable data could be found online.
-
-# Section 8 — Convert the Downloaded Series to a Common Monthly Key
-
-Every series is converted to a `yearmon` key (e.g., "Jan 2018") **before** joining. This avoids silently losing observations because one source stamps a month on its first day and another on its last.
+Every series is converted to have a year-month key (e.g., "Jan 2018") **before** joining. This prevents random observation loss and also ensures consistency across each table.
 
 ```{r monthly-helpers}
 monthly_df_xts <- function(x, name, how = c("last", "mean")) {
@@ -221,7 +188,7 @@ monthly_df_xts <- function(x, name, how = c("last", "mean")) {
     rename(!!name := value)
 }
 
-# --- Daily market series -> monthly averages ---
+# This gets the monthly average of the USD/PHP conversion rate, VIX, and WTI
 usdphp_df <- monthly_df_xts(usdphp_px, "USD_PHP", how = "mean")
 vix_df    <- monthly_df_xts(vix_raw,   "VIX",     how = "mean")
 wti_df    <- monthly_df_xts(wti_raw,   "WTI",     how = "mean")
@@ -233,11 +200,37 @@ head(usdphp_df)
 head(vix_df)
 head(wti_df)
 ```
-# Section 9 — Load the Local CSV (BDO, PSEi, BSP / PSA Series)
 
-The local CSV already contains the transformed series (BDO and PSEi returns, month-end first differences, YoY rates), so **no further transformation is applied**. It is used exactly as supplied; the only step is turning the `month` label into a `yearmon` key so it can be joined to the downloaded data.
+## Section 1.5 — Local CSV Loading and Transformations
 
-**M3 growth is omitted** from this dataset because no usable data could be found online.
+For easier processing, the local CSV already contains data that has pre-transformed following the specifications per variable. Again, M3 growth is omitted from this dataset because no usable data could be found online. For convenience, all of the data taken locally was brought into one large CSV file containing the transformed data.
+
+The contents of the raw data of each variable and how they were transformed are as follows:
+
+
+```{r csv-variables}
+csv_regressors <- tribble(
+  ~Candidate_Regressor,                 ~Raw_Data,                  ~Transformation,           ~Source,                        ~Initial_Data,
+    "BDO return (DEPENDENT)", "Price for every trading date in the time range", "Monthly log return",      "Investing.com (price return)",    "The natural log of the current month's last trading day is subtracted from the natural log of the previous month's last trading day.",
+  
+    "PSEi return", "Price for every trading date in the time range",  "Monthly log return",      "Investing.com (price history)",    "The natural log of the current month's last trading day is subtracted from the natural log of the previous month's last trading day.",
+    
+    "BSP RRP rate change", "A list of every announcement within the time range regarding a change in the BSP RRP rate.",               "Month-end first difference", "BSP", "If a month has an indicated change in rate from the announcement, that respective month has a value. Otherwise, it is set to 0.",
+  
+      "PH 10Y gov't-yield change",          "Price for every trading date in the time range",                "Month-end first difference", "Investing.com",   "Current month last day minus previous month last day",
+  
+      "CPI inflation",                      "A table containing all the necessary YoY% change in CPI",                   "YoY % change",            "PSA",    "The data had to be manually transposed, thoough the results were pre-computed",
+  
+      "OFW remittance growth",              "Monthly OFW remittance in levels of 1 million USD",       "YoY % growth",            "BSP",           "YoY% growth was computed using a month's current-year performance against its performance in the previous year.",
+  
+      "Manufacturing-production growth",    "Raw MISSI data per month within the time range", "YoY % growth",         "PSA MISSI", "Data was transposed into a vertical format as the original data was horizontal."
+)
+
+csv_regressors |>
+  research_flextable()
+```
+
+Since the CSV already contains pre-transformed data, the only step left is turning the `month` label into a year-month key so it can be joined to the downloaded data.
 
 ```{r load-local}
 if (!file.exists(local_file)) {
@@ -252,9 +245,11 @@ stopifnot(!anyNA(local_df$month), !anyDuplicated(local_df$month))
 head(local_df)
 ```
 
-# Section 10 — Log Changes for the Downloaded Series
 
-Only the downloaded data needs transforming. USD/PHP and WTI use `log(level_t) - log(level_{t-1})`; VIX stays as a monthly average level. December 2017 is in the downloaded data only to supply the base for January 2018 and is dropped by the join.
+
+## Section 1.6 — Log Changes for the Downloaded Series
+
+In order to match the specifications, USD/PHP and WTI use `log(level_t) - log(level_{t-1})` to compute for monthly log return. VIX, on the other hand,only computes for the monthly average. December 2017 is in the downloaded data only to supply the base for January 2018 and is dropped by the join.
 
 ```{r market-transforms}
 market_list <- list(USD_PHP = usdphp_df, VIX = vix_df, WTI = wti_df)
@@ -281,9 +276,9 @@ head(market_df)
 ```
 
 
-# Section 11 — Join the Downloaded Data with the CSV Data
+## Section 1.7 — Join the Downloaded Data with the CSV Data
 
-A complete monthly spine (Jan 2018 to Dec 2025) is built first, and each table is left-joined to it on the `yearmon` key. Any month missing from a source therefore shows up as an `NA` instead of silently disappearing.
+Each table is joined to one another using a left join on tthe year-month key.
 
 ```{r join-tables}
 month_spine <- tibble(
@@ -315,15 +310,10 @@ analysis_df |>
   pivot_longer(everything(), names_to = "Variable", values_to = "Missing") |>
   cobalt_kable(caption = "Missing Values by Variable")
 
-# Save the ready-to-model table
-readr::write_csv(
-  analysis_df |> mutate(month = format(month)),
-  "analysis_dataset.csv"
-)
 view(analysis_df)
 ```
 
-# Section 12 — Baseline Multiple Linear Regression
+# Section 2 — Baseline Multiple Linear Regression
 
 A single baseline model using every available column as a regressor (M3 excluded), fitted on the full sample. Only its fit is reported here.
 
@@ -353,12 +343,12 @@ coef(baseline_lm)
 
 
 
-# 4.3 Statistical Inference
+# Section 3 - Statistical Inference
 
 The baseline model is used to check how each factor is related to BDO's monthly return while accounting for the other factors. Changes in BDO return are measured in percentage points. These results describe associations and do not establish cause and effect.
 
 
-## 4.3.1 Individual Coefficient Tests
+## 3.1 Individual Coefficient Tests
 
 Each factor is tested at the 5% significance level. The test allows for either a positive or negative relationship, so it is called a two-sided test.
 
@@ -498,7 +488,7 @@ coefficient_results |>
 ```
 
 
-## 4.3.2 Confidence Intervals and Parameter Uncertainty
+## 3.2 Confidence Intervals and Parameter Uncertainty
 
 The 95% confidence interval shows a range of values consistent with the coefficient estimate and its uncertainty. A wider interval means the estimate is less precise. If the interval includes zero, there is not enough evidence to say that the coefficient differs from zero at the 5% significance level.
 
@@ -543,7 +533,7 @@ confidence_intervals |>
 ```
 
 
-## 4.3.3 Statistical versus Economic Significance
+## 3.3 Statistical versus Economic Significance
 
 Statistical significance tells us whether there is enough evidence to detect a relationship. Economic significance asks whether the estimated change in BDO return is large enough to matter financially. The tables below show estimated changes for a typical movement in each factor and for selected scenarios.
 
@@ -603,7 +593,7 @@ economic_effects |>
 One standard deviation (One-SD) describes how much a factor typically varies in this sample. The percentage column compares the size of the estimated change with BDO's usual monthly variation. It is not the share of returns explained by the model. The scenario intervals show uncertainty around the estimated changes; they are not forecasts of future returns.
 
 
-## 4.3.4 Joint Hypothesis Tests
+## 3.4 Joint Hypothesis Tests
 
 The first test asks whether the nine factors together help explain BDO returns. The second asks whether the other eight factors add information beyond PSEi alone. Each group is tested as a whole, so a significant result does not tell us which individual factors matter.
 
@@ -703,12 +693,12 @@ These tests assume that the unexplained part of BDO returns has a similar spread
 
 
 
-# 4.4 Model Evaluation and Comparison
+# Section 4 - Model Evaluation and Comparison
 
 Compare three models to see whether adding more factors improves how well they explain BDO returns. Each model uses the same months and the same measure of BDO return to compare them fairly.
 
 
-## 4.4.1 Models Being Compared
+## 4.1 Models Being Compared
 
 - **Market benchmark:** Uses PSEi returns to represent movements in the Philippine stock market.
 - **Market + domestic conditions:** Starts with PSEi and adds changes in the policy rate, government yield, and exchange rate, plus inflation, remittance growth, and manufacturing growth.
@@ -750,7 +740,7 @@ stopifnot(all(vapply(
 ```
 
 
-## 4.4.2 Model Fit and Complexity
+## 4.2 Model Fit and Complexity
 
 - **N / Slopes:** Number of months / explanatory factors, excluding the constant.
 - **R-squared:** Share of variation in BDO returns explained by the model. A higher value means a closer fit in this sample.
@@ -801,7 +791,7 @@ model_comparison |>
 ```
 
 
-## 4.4.3 Nested-Model Comparisons
+## 4.3 Nested-Model Comparisons
 
 Each test compares a smaller model with one that contains all its factors plus some extra ones. The first adds six domestic factors to the PSEi model. The second adds WTI returns and VIX to the domestic model. Each test checks whether the added group helps explain BDO returns.
 
@@ -870,7 +860,7 @@ nested_test_results |>
 ```
 
 
-## 4.4.4 PSEi Coefficient across Models
+## 4.4 PSEi Coefficient across Models
 
 For each model, the estimate shows the expected change in BDO return for a one-percentage-point increase in PSEi return, holding the other included factors constant. The estimated change is also in percentage points. The confidence limits show how uncertain the estimate is. The rows are compared to see how the PSEi estimate changes as factors are added; this is not a formal test of equal coefficients.
 
@@ -908,7 +898,7 @@ market_coefficient_comparison |>
 ```
 
 
-## 4.4.5 Comparison Summary
+## 4.5 Comparison Summary
 
 This table shows which model scores best on each measure. A higher adjusted R-squared and lower AIC and BIC are looked for. These results help us compare models, but the final choice should also consider financial reasoning, uncertainty, and the tests of added factors. A model should not be chosen just because it has the largest R-squared.
 
@@ -947,7 +937,7 @@ criterion_summary |>
 
 
 
-# 4.5 Regression Diagnostics
+# Section 5 - Regression Diagnostics
 
 The tests in 4.3 and 4.4 rely on assumptions about the baseline model's errors (the part of BDO's return the model does not explain). This section checks those assumptions one at a time. Each check uses the full baseline model (`baseline_lm`) and the same 5% significance level as 4.3 (`inference_alpha`).
 
@@ -969,7 +959,7 @@ regressor_names <- setdiff(names(coef(baseline_lm)), "(Intercept)")
 ```
 
 
-## 4.5.1 Multicollinearity
+## 5.1 Multicollinearity
 
 Multicollinearity happens when two or more factors move closely together, so the model cannot separate their individual effects. It does not bias the estimates, but it widens their standard errors.
 
@@ -1009,8 +999,7 @@ regressor_correlations |>
   ggplot(aes(Variable_1, Variable_2, fill = Correlation)) +
   geom_tile(colour = "white") +
   geom_text(aes(label = round(Correlation, 2)), size = 3) +
-  scale_fill_gradient2(low = "grey30", mid = "white", high = "grey30",
-                       midpoint = 0, limits = c(-1, 1)) +
+  scale_fill_gradient2(midpoint = 0, limits = c(-1, 1)) +   # <- default colors
   labs(title = "Correlation between regressors", x = NULL, y = NULL) +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
@@ -1041,7 +1030,7 @@ vif_results |>
 ```
 
 
-## 4.5.2 Heteroskedasticity
+## 5.2 Heteroskedasticity
 
 Heteroskedasticity means the spread of the errors changes across observations, for example larger errors in volatile months. The coefficients stay unbiased, but the usual standard errors, and so the p-values and confidence intervals in 4.3, can be wrong.
 
@@ -1092,7 +1081,7 @@ heteroskedasticity_results |>
 ```
 
 
-## 4.5.3 Autocorrelation
+## 5.3 Autocorrelation
 
 The data are monthly, so this month's error may be related to last month's error. If so, the usual standard errors are again unreliable.
 
@@ -1143,7 +1132,7 @@ autocorrelation_results |>
 ```
 
 
-## 4.5.4 Outliers and Influential Observations
+## 5.4 Outliers and Influential Observations
 
 Some months may be unusual enough to pull the estimated coefficients toward them. Three measures are used:
 
@@ -1229,7 +1218,7 @@ tibble(Month = as.Date(diag_months),
 ```
 
 
-## 4.5.5 Residual Diagnostics
+## 5.5 Residual Diagnostics
 
 Two more checks on the residuals:
 
@@ -1287,7 +1276,7 @@ tibble(Skewness = jb_skew, Kurtosis = jb_kurt) |>
 ```
 
 
-## 4.5.6 Summary of Diagnostic Findings
+## 5.6 Summary of Diagnostic Findings
 
 ```{r diag-summary}
 diagnostic_summary <- tibble(
@@ -1340,12 +1329,12 @@ diagnostic_summary |>
 
 
 
-# 4.6 Model Improvement
+# Section 6 - Model Improvement
 
 This section responds to the problems found in 4.5. Each remedy is applied only where the diagnostics or the data justify it, and the improved model is then compared with the baseline.
 
 
-## 4.6.1 Problems Addressed and Remedies
+## 6.1 Problems Addressed and Remedies
 
 ```{r improve-plan}
 tibble(
@@ -1370,7 +1359,7 @@ tibble(
 ```
 
 
-## 4.6.2 Remedy 1: Winsorizing Manufacturing Growth
+## 6.2 Remedy 1: Winsorizing Manufacturing Growth
 
 Winsorizing replaces values below the 5th percentile with the 5th percentile, and values above the 95th percentile with the 95th percentile. The month stays in the sample; only its extreme value is capped.
 
@@ -1418,7 +1407,7 @@ tibble(
 ```
 
 
-## 4.6.3 Remedy 2: Newey-West (HAC) Robust Standard Errors
+## 6.3 Remedy 2: Newey-West (HAC) Robust Standard Errors
 
 Newey-West standard errors adjust for both heteroskedasticity and autocorrelation (HAC). They do not change the coefficient estimates, only their standard errors, t-statistics and p-values. The number of lags follows the common rule of thumb floor(4(n/100)^(2/9)).
 
@@ -1486,7 +1475,7 @@ tibble(
 ```
 
 
-## 4.6.4 Remedy 3: Sensitivity to Influential Months
+## 6.4 Remedy 3: Sensitivity to Influential Months
 
 The improved model is refit without the months flagged by Cook's distance in 4.5.4. If the main conclusions hold without them, the results do not depend on a few unusual months.
 
@@ -1506,7 +1495,7 @@ tibble(Months_Removed = paste(influential_months, collapse = ", "),
 ```
 
 
-## 4.6.5 Baseline vs. Improved Model
+## 6.5 Baseline vs. Improved Model
 
 The table compares each coefficient across three versions:
 
@@ -1617,11 +1606,11 @@ tibble(
 
 
 
-# 4.7 Advanced Regression
+# Section 7 - Advanced Regression
 
 The sensitivity check in 4.6 showed that some coefficients (notably VIX and the 10Y yield change) changed sign when the crisis months were removed. This section tests directly whether BDO's relationships behave differently during periods of market stress, using a **categorical (dummy) variable with interaction terms**.
 
-## 4.7.1 Method and Stress-Period Definition
+## 7.1 Method and Stress-Period Definition
 
 `Stress` equals 1 in two externally dated episodes and 0 otherwise:
 
@@ -1676,7 +1665,7 @@ advanced_data |>
   flextable::colformat_double(digits = 3)
 ```
 
-## 4.7.2 Estimation
+## 7.2 Estimation
 
 $$
 \begin{aligned}
@@ -1748,7 +1737,7 @@ regime_slopes |>
   flextable::colformat_double(digits = 4)
 ```
 
-## 4.7.3 Do the Stress Terms Improve the Model?
+## 7.3 Do the Stress Terms Improve the Model?
 
 - **H0:** $\delta_0 = \delta_1 = \delta_2 = \delta_3 = 0$ (BDO's relationships are the same in calm and stress months).
 - **H1:** At least one $\delta_j \neq 0$.
@@ -1783,7 +1772,7 @@ bind_rows(
   flextable::colformat_double(digits = 4)
 ```
 
-## 4.7.4 Robustness of the Stress Results
+## 7.4 Robustness of the Stress Results
 
 A single significant interaction could reflect a handful of months rather than a stable pattern. The model is re-estimated with each episode alone, with narrower and wider windows, and without the Cook's distance months from 4.5.4. Individual p-values use Newey-West standard errors; the joint test is reported with both Newey-West (`Joint_HAC_p`) and ordinary (`Joint_OLS_p`) standard errors, because HAC standard errors can be too small when an interaction is identified by only a few months.
 
@@ -1856,7 +1845,7 @@ advanced_data |>
   theme(legend.position = "bottom")
 ```
 
-## 4.7.5 Final Model Choice
+## 7.5 Final Model Choice
 
 ```{r adv-final-choice}
 tibble(
@@ -1879,11 +1868,11 @@ tibble(
 ```
 
 
-# 4.8 Financial Interpretation
+# Section 8 - Financial Interpretation
 
 This section translates the final model (the improved model from 4.6) into quantities an investor would use: BDO's market beta, how much of its risk is market-driven, and what BDO's return looks like under different market scenarios. All returns are monthly log returns in percent.
 
-## 4.8.1 Market Beta
+## 8.1 Market Beta
 
 A beta of 1 means BDO moves one-for-one with the PSEi. The test below checks whether BDO is more or less sensitive to the market than that.
 
@@ -1910,7 +1899,7 @@ tibble(
   flextable::flextable()
 ```
 
-## 4.8.2 Systematic versus Firm-Specific Risk
+## 8.2 Systematic versus Firm-Specific Risk
 
 BDO's total return variance is split into a market (systematic) part, $\hat\beta^2 \sigma^2_{\text{PSEi}}$, and a firm-specific (idiosyncratic) part, $\sigma^2_e$, using the market-only model on the same data. Monthly standard deviations are annualized by multiplying by $\sqrt{12}$.
 
@@ -1931,7 +1920,7 @@ tibble(
   flextable::colformat_double(digits = 2)
 ```
 
-## 4.8.3 Market Scenarios
+## 8.3 Market Scenarios
 
 Expected BDO return for given PSEi monthly returns, holding the other eight factors at their sample means. The confidence interval reflects uncertainty in the estimated average response (HAC); the prediction interval adds the month-to-month noise an investor would actually experience.
 
@@ -1962,7 +1951,7 @@ tibble(
   flextable::colformat_double(digits = 2)
 ```
 
-## 4.8.4 Summary of Findings for the Decision-Maker
+## 8.4 Summary of Findings for the Decision-Maker
 
 ```{r fin-summary}
 improved_results |>
