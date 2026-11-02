@@ -15,6 +15,10 @@ output:
     number_sections: false
     latex_engine: xelatex
 ---
+- Aragon, Enrique Miguel
+- Lim, Andrei Gyles
+- Millares, Brendan
+- Quiazon, Erin
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(
@@ -37,6 +41,7 @@ library(scales)
 library(zoo)
 library(lmtest)
 library(sandwich)
+library(PerformanceAnalytics)
 
 flextable::set_flextable_defaults(
   post_process_html = function(ft) {
@@ -311,6 +316,270 @@ analysis_df |>
   cobalt_kable(caption = "Missing Values by Variable")
 
 view(analysis_df)
+```
+
+## Section 1.8 - Descriptive Statistics
+In order to better understand the multi-faceted nature of the data, we calculate descriptive statistics pertaining to each variable.
+
+```{r}
+descriptive_table <- tibble(
+
+  Statistic = c(
+    "Mean",
+    "Median",
+    "Trimmed Mean",
+    "Standard Deviation",
+    "Variance",
+    "Minimum",
+    "Q1",
+    "Q3",
+    "Maximum",
+    "Range",
+    "Interquartile Range",
+    "Coefficient of Variation",
+    "Skewness",
+    "Kurtosis",
+    "Observations"
+  ),
+
+  BDO_return = c(
+    mean(analysis_df$BDO_return, na.rm = TRUE),
+    median(analysis_df$BDO_return, na.rm = TRUE),
+    mean(analysis_df$BDO_return, trim = 0.05, na.rm = TRUE),
+    sd(analysis_df$BDO_return, na.rm = TRUE),
+    var(analysis_df$BDO_return, na.rm = TRUE),
+    min(analysis_df$BDO_return, na.rm = TRUE),
+    quantile(analysis_df$BDO_return, 0.25, na.rm = TRUE),
+    quantile(analysis_df$BDO_return, 0.75, na.rm = TRUE),
+    max(analysis_df$BDO_return, na.rm = TRUE),
+    diff(range(analysis_df$BDO_return, na.rm = TRUE)),
+    IQR(analysis_df$BDO_return, na.rm = TRUE),
+    sd(analysis_df$BDO_return, na.rm = TRUE) /
+      mean(analysis_df$BDO_return, na.rm = TRUE),
+    skewness(analysis_df$BDO_return, na.rm = TRUE),
+    kurtosis(analysis_df$BDO_return, na.rm = TRUE),
+    sum(!is.na(analysis_df$BDO_return))
+  ),
+  
+  PSEI_return = c(
+    mean(analysis_df$PSEI_return, na.rm = TRUE),
+    median(analysis_df$PSEI_return, na.rm = TRUE),
+    mean(analysis_df$PSEI_return, trim = 0.05, na.rm = TRUE),
+    sd(analysis_df$PSEI_return, na.rm = TRUE),
+    var(analysis_df$PSEI_return, na.rm = TRUE),
+    min(analysis_df$PSEI_return, na.rm = TRUE),
+    quantile(analysis_df$PSEI_return, 0.25, na.rm = TRUE),
+    quantile(analysis_df$PSEI_return, 0.75, na.rm = TRUE),
+    max(analysis_df$PSEI_return, na.rm = TRUE),
+    diff(range(analysis_df$PSEI_return, na.rm = TRUE)),
+    IQR(analysis_df$PSEI_return, na.rm = TRUE),
+    sd(analysis_df$PSEI_return, na.rm = TRUE) /
+      mean(analysis_df$PSEI_return, na.rm = TRUE),
+    skewness(analysis_df$PSEI_return, na.rm = TRUE),
+    kurtosis(analysis_df$PSEI_return, na.rm = TRUE),
+    sum(!is.na(analysis_df$PSEI_return))
+  ),
+  
+  BSP_RRP = c(
+    mean(analysis_df$BSP_RRP, na.rm = TRUE),
+    median(analysis_df$BSP_RRP, na.rm = TRUE),
+    mean(analysis_df$BSP_RRP, trim = 0.05, na.rm = TRUE),
+    sd(analysis_df$BSP_RRP, na.rm = TRUE),
+    var(analysis_df$BSP_RRP, na.rm = TRUE),
+    min(analysis_df$BSP_RRP, na.rm = TRUE),
+    quantile(analysis_df$BSP_RRP, 0.25, na.rm = TRUE),
+    quantile(analysis_df$BSP_RRP, 0.75, na.rm = TRUE),
+    max(analysis_df$BSP_RRP, na.rm = TRUE),
+    diff(range(analysis_df$BSP_RRP, na.rm = TRUE)),
+    IQR(analysis_df$BSP_RRP, na.rm = TRUE),
+    sd(analysis_df$BSP_RRP, na.rm = TRUE) /
+      mean(analysis_df$BSP_RRP, na.rm = TRUE),
+    skewness(analysis_df$BSP_RRP, na.rm = TRUE),
+    kurtosis(analysis_df$BSP_RRP, na.rm = TRUE),
+    sum(!is.na(analysis_df$BSP_RRP))
+  ),
+  PH_10Y_Yield = c(
+    mean(analysis_df$PH_10Y_Yield, na.rm = TRUE),
+    median(analysis_df$PH_10Y_Yield, na.rm = TRUE),
+    mean(analysis_df$PH_10Y_Yield, trim = 0.05, na.rm = TRUE),
+    sd(analysis_df$PH_10Y_Yield, na.rm = TRUE),
+    var(analysis_df$PH_10Y_Yield, na.rm = TRUE),
+    min(analysis_df$PH_10Y_Yield, na.rm = TRUE),
+    quantile(analysis_df$PH_10Y_Yield, 0.25, na.rm = TRUE),
+    quantile(analysis_df$PH_10Y_Yield, 0.75, na.rm = TRUE),
+    max(analysis_df$PH_10Y_Yield, na.rm = TRUE),
+    diff(range(analysis_df$PH_10Y_Yield, na.rm = TRUE)),
+    IQR(analysis_df$PH_10Y_Yield, na.rm = TRUE),
+    sd(analysis_df$PH_10Y_Yield, na.rm = TRUE) /
+      mean(analysis_df$PH_10Y_Yield, na.rm = TRUE),
+    skewness(analysis_df$PH_10Y_Yield, na.rm = TRUE),
+    kurtosis(analysis_df$PH_10Y_Yield, na.rm = TRUE),
+    sum(!is.na(analysis_df$PH_10Y_Yield))
+  ),
+  CPI = c(
+    mean(analysis_df$CPI, na.rm = TRUE),
+    median(analysis_df$CPI, na.rm = TRUE),
+    mean(analysis_df$CPI, trim = 0.05, na.rm = TRUE),
+    sd(analysis_df$CPI, na.rm = TRUE),
+    var(analysis_df$CPI, na.rm = TRUE),
+    min(analysis_df$CPI, na.rm = TRUE),
+    quantile(analysis_df$CPI, 0.25, na.rm = TRUE),
+    quantile(analysis_df$CPI, 0.75, na.rm = TRUE),
+    max(analysis_df$CPI, na.rm = TRUE),
+    diff(range(analysis_df$CPI, na.rm = TRUE)),
+    IQR(analysis_df$CPI, na.rm = TRUE),
+    sd(analysis_df$CPI, na.rm = TRUE) /
+      mean(analysis_df$CPI, na.rm = TRUE),
+    skewness(analysis_df$CPI, na.rm = TRUE),
+    kurtosis(analysis_df$CPI, na.rm = TRUE),
+    sum(!is.na(analysis_df$CPI))
+  ),
+  OFW_remittance = c(
+    mean(analysis_df$OFW_remittance, na.rm = TRUE),
+    median(analysis_df$OFW_remittance, na.rm = TRUE),
+    mean(analysis_df$OFW_remittance, trim = 0.05, na.rm = TRUE),
+    sd(analysis_df$OFW_remittance, na.rm = TRUE),
+    var(analysis_df$OFW_remittance, na.rm = TRUE),
+    min(analysis_df$OFW_remittance, na.rm = TRUE),
+    quantile(analysis_df$OFW_remittance, 0.25, na.rm = TRUE),
+    quantile(analysis_df$OFW_remittance, 0.75, na.rm = TRUE),
+    max(analysis_df$OFW_remittance, na.rm = TRUE),
+    diff(range(analysis_df$OFW_remittance, na.rm = TRUE)),
+    IQR(analysis_df$OFW_remittance, na.rm = TRUE),
+    sd(analysis_df$OFW_remittance, na.rm = TRUE) /
+      mean(analysis_df$OFW_remittance, na.rm = TRUE),
+    skewness(analysis_df$OFW_remittance, na.rm = TRUE),
+    kurtosis(analysis_df$OFW_remittance, na.rm = TRUE),
+    sum(!is.na(analysis_df$OFW_remittance))
+  ),
+  manafactuting_prod_growth = c(
+    mean(analysis_df$manafactuting_prod_growth, na.rm = TRUE),
+    median(analysis_df$manafactuting_prod_growth, na.rm = TRUE),
+    mean(analysis_df$manafactuting_prod_growth, trim = 0.05, na.rm = TRUE),
+    sd(analysis_df$manafactuting_prod_growth, na.rm = TRUE),
+    var(analysis_df$manafactuting_prod_growth, na.rm = TRUE),
+    min(analysis_df$manafactuting_prod_growth, na.rm = TRUE),
+    quantile(analysis_df$manafactuting_prod_growth, 0.25, na.rm = TRUE),
+    quantile(analysis_df$manafactuting_prod_growth, 0.75, na.rm = TRUE),
+    max(analysis_df$manafactuting_prod_growth, na.rm = TRUE),
+    diff(range(analysis_df$manafactuting_prod_growth, na.rm = TRUE)),
+    IQR(analysis_df$manafactuting_prod_growth, na.rm = TRUE),
+    sd(analysis_df$manafactuting_prod_growth, na.rm = TRUE) /
+      mean(analysis_df$manafactuting_prod_growth, na.rm = TRUE),
+    skewness(analysis_df$manafactuting_prod_growth, na.rm = TRUE),
+    kurtosis(analysis_df$manafactuting_prod_growth, na.rm = TRUE),
+    sum(!is.na(analysis_df$manafactuting_prod_growth))
+  ),
+  USD_PHP_Change = c(
+    mean(analysis_df$USD_PHP_Change, na.rm = TRUE),
+    median(analysis_df$USD_PHP_Change, na.rm = TRUE),
+    mean(analysis_df$USD_PHP_Change, trim = 0.05, na.rm = TRUE),
+    sd(analysis_df$USD_PHP_Change, na.rm = TRUE),
+    var(analysis_df$USD_PHP_Change, na.rm = TRUE),
+    min(analysis_df$USD_PHP_Change, na.rm = TRUE),
+    quantile(analysis_df$USD_PHP_Change, 0.25, na.rm = TRUE),
+    quantile(analysis_df$USD_PHP_Change, 0.75, na.rm = TRUE),
+    max(analysis_df$USD_PHP_Change, na.rm = TRUE),
+    diff(range(analysis_df$USD_PHP_Change, na.rm = TRUE)),
+    IQR(analysis_df$USD_PHP_Change, na.rm = TRUE),
+    sd(analysis_df$USD_PHP_Change, na.rm = TRUE) /
+      mean(analysis_df$USD_PHP_Change, na.rm = TRUE),
+    skewness(analysis_df$USD_PHP_Change, na.rm = TRUE),
+    kurtosis(analysis_df$USD_PHP_Change, na.rm = TRUE),
+    sum(!is.na(analysis_df$USD_PHP_Change))
+  ),
+  WTI_Return = c(
+    mean(analysis_df$WTI_Return, na.rm = TRUE),
+    median(analysis_df$WTI_Return, na.rm = TRUE),
+    mean(analysis_df$WTI_Return, trim = 0.05, na.rm = TRUE),
+    sd(analysis_df$WTI_Return, na.rm = TRUE),
+    var(analysis_df$WTI_Return, na.rm = TRUE),
+    min(analysis_df$WTI_Return, na.rm = TRUE),
+    quantile(analysis_df$WTI_Return, 0.25, na.rm = TRUE),
+    quantile(analysis_df$WTI_Return, 0.75, na.rm = TRUE),
+    max(analysis_df$WTI_Return, na.rm = TRUE),
+    diff(range(analysis_df$WTI_Return, na.rm = TRUE)),
+    IQR(analysis_df$WTI_Return, na.rm = TRUE),
+    sd(analysis_df$WTI_Return, na.rm = TRUE) /
+      mean(analysis_df$WTI_Return, na.rm = TRUE),
+    skewness(analysis_df$WTI_Return, na.rm = TRUE),
+    kurtosis(analysis_df$WTI_Return, na.rm = TRUE),
+    sum(!is.na(analysis_df$WTI_Return))
+  ),
+  VIX = c(
+    mean(analysis_df$VIX, na.rm = TRUE),
+    median(analysis_df$VIX, na.rm = TRUE),
+    mean(analysis_df$VIX, trim = 0.05, na.rm = TRUE),
+    sd(analysis_df$VIX, na.rm = TRUE),
+    var(analysis_df$VIX, na.rm = TRUE),
+    min(analysis_df$VIX, na.rm = TRUE),
+    quantile(analysis_df$VIX, 0.25, na.rm = TRUE),
+    quantile(analysis_df$VIX, 0.75, na.rm = TRUE),
+    max(analysis_df$VIX, na.rm = TRUE),
+    diff(range(analysis_df$VIX, na.rm = TRUE)),
+    IQR(analysis_df$VIX, na.rm = TRUE),
+    sd(analysis_df$VIX, na.rm = TRUE) /
+      mean(analysis_df$VIX, na.rm = TRUE),
+    skewness(analysis_df$VIX, na.rm = TRUE),
+    kurtosis(analysis_df$VIX, na.rm = TRUE),
+    sum(!is.na(analysis_df$VIX))
+  )
+)
+
+
+descriptive_table |>
+  research_flextable()
+```
+
+## Section 1.9 - Visualizations
+While descriptive statistics offer numerical information about the data, this alone does not explain the nuances and trends of the data sufficiently. In order to gain a deeper understanding, we create relevant visualizations as seen below.
+
+```{r}
+returns_long <- analysis_df |>
+  select(month, BDO_return, PSEI_return) |>
+  pivot_longer(cols = c(BDO_return, PSEI_return), 
+               names_to = "Asset", values_to = "Return")
+
+ggplot(returns_long, aes(x = Return, fill = Asset)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 15, alpha = 0.6, position = "identity") +
+  geom_density(alpha = 0.4, linewidth = 1) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+  facet_wrap(~ Asset, scales = "free_y") +
+  labs(
+    title = "Distribution of Monthly Log Returns",
+    x = "Monthly Log Return (%)",
+    y = "Density"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+```{r, fig.width = 16, fig.height = 12, out.width = "100%"}
+all_vars_long <- analysis_df |>
+  select(month, BDO_return, PSEI_return, BSP_RRP, PH_10Y_Yield, 
+         CPI, OFW_remittance, manafactuting_prod_growth, 
+         USD_PHP_Change, WTI_Return, VIX) |>
+  pivot_longer(-month, names_to = "Variable", values_to = "Value")
+
+ggplot(all_vars_long, aes(x = as.Date(month), y = Value)) +
+  geom_line(color = "steelblue", linewidth = 0.5) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey50", alpha = 0.5) +
+  
+  # Facet by variable and free the Y-axis so scales don't clash
+  facet_wrap(~ Variable, scales = "free_y", ncol = 4) +
+  
+  labs(
+    title = "Time Series of All Variables (2018–2025)",
+    x = NULL,
+    y = "Value"
+  ) +
+  theme_minimal() +
+  theme(
+    strip.text = element_text(face = "bold", size = 9),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 7),
+    axis.text.y = element_text(size = 7),
+    panel.grid.minor = element_blank()
+  )
 ```
 
 # Section 2 — Baseline Multiple Linear Regression
@@ -939,7 +1208,7 @@ criterion_summary |>
 
 # Section 5 - Regression Diagnostics
 
-The tests in 4.3 and 4.4 rely on assumptions about the baseline model's errors (the part of BDO's return the model does not explain). This section checks those assumptions one at a time. Each check uses the full baseline model (`baseline_lm`) and the same 5% significance level as 4.3 (`inference_alpha`).
+The tests in sections 3 and 4 rely on assumptions about the baseline model's errors (the part of BDO's return the model does not explain). This section checks those assumptions one at a time. Each check uses the full baseline model (`baseline_lm`) and the same 5% significance level as 4.3 (`inference_alpha`).
 
 ```{r diag-setup}
 # Shared objects for the diagnostics
@@ -1032,7 +1301,7 @@ vif_results |>
 
 ## 5.2 Heteroskedasticity
 
-Heteroskedasticity means the spread of the errors changes across observations, for example larger errors in volatile months. The coefficients stay unbiased, but the usual standard errors, and so the p-values and confidence intervals in 4.3, can be wrong.
+Heteroskedasticity means the spread of the errors changes across observations, for example larger errors in volatile months. The coefficients stay unbiased, but the usual standard errors, and so the p-values and confidence intervals in section 3 can be wrong.
 
 - **Residuals vs. fitted plot:** If the spread of points widens or narrows as fitted values change, that suggests heteroskedasticity.
 - **Breusch-Pagan test:** Regresses the squared residuals on the factors. H0: the error variance is constant (homoskedastic). H1: the error variance depends on the factors.
@@ -1331,7 +1600,7 @@ diagnostic_summary |>
 
 # Section 6 - Model Improvement
 
-This section responds to the problems found in 4.5. Each remedy is applied only where the diagnostics or the data justify it, and the improved model is then compared with the baseline.
+This section responds to the problems found in Section 5. Each remedy is applied only where the diagnostics or the data justify it, and the improved model is then compared with the baseline.
 
 
 ## 6.1 Problems Addressed and Remedies
@@ -1477,7 +1746,7 @@ tibble(
 
 ## 6.4 Remedy 3: Sensitivity to Influential Months
 
-The improved model is refit without the months flagged by Cook's distance in 4.5.4. If the main conclusions hold without them, the results do not depend on a few unusual months.
+The improved model is refit without the months flagged by Cook's distance in Section 5.4. If the main conclusions hold without them, the results do not depend on a few unusual months.
 
 ```{r improve-sensitivity}
 influential_months <- influence_table |>
@@ -1499,7 +1768,7 @@ tibble(Months_Removed = paste(influential_months, collapse = ", "),
 
 The table compares each coefficient across three versions:
 
-- **Baseline:** Original model with ordinary (OLS) standard errors, as in 4.3.
+- **Baseline:** Original model with ordinary (OLS) standard errors, as in section 3.
 - **Improved:** Winsorized manufacturing growth with Newey-West standard errors.
 - **Without influential months:** Improved specification refit without the Cook's distance months, with Newey-West standard errors.
 
@@ -1608,7 +1877,7 @@ tibble(
 
 # Section 7 - Advanced Regression
 
-The sensitivity check in 4.6 showed that some coefficients (notably VIX and the 10Y yield change) changed sign when the crisis months were removed. This section tests directly whether BDO's relationships behave differently during periods of market stress, using a **categorical (dummy) variable with interaction terms**.
+The sensitivity check in section 6 showed that some coefficients (notably VIX and the 10Y yield change) changed sign when the crisis months were removed. This section tests directly whether BDO's relationships behave differently during periods of market stress, using a **categorical (dummy) variable with interaction terms**.
 
 ## 7.1 Method and Stress-Period Definition
 
@@ -1617,7 +1886,7 @@ The sensitivity check in 4.6 showed that some coefficients (notably VIX and the 
 - **COVID-19 shock:** March to December 2020 (lockdowns, market crash and recovery).
 - **BSP tightening cycle:** May 2022 (first BSP rate hike) to October 2023 (last hike, the off-cycle increase to 6.50%).
 
-The periods are dated from outside events, not from the Cook's distance months in 4.5.4, so the dummy is not fitted to the model's own residuals. The improved specification from 4.6 (winsorized manufacturing growth, Newey-West standard errors) is extended with:
+The periods are dated from outside events, not from the Cook's distance months in section 5.4, so the dummy is not fitted to the model's own residuals. The improved specification from section 6.5 (winsorized manufacturing growth, Newey-West standard errors) is extended with:
 
 - `Stress`: shift in BDO's average return during stress months, holding the factors constant.
 - `PSEI_return:Stress`: change in BDO's market beta during stress (the most decision-relevant question for an equity holder).
@@ -1742,7 +2011,7 @@ regime_slopes |>
 - **H0:** $\delta_0 = \delta_1 = \delta_2 = \delta_3 = 0$ (BDO's relationships are the same in calm and stress months).
 - **H1:** At least one $\delta_j \neq 0$.
 
-The test uses the Newey-West covariance matrix, matching 4.6.
+The test uses the Newey-West covariance matrix, matching section 6.
 
 ```{r adv-joint-test}
 stress_joint <- lmtest::waldtest(improved_lm, stress_lm, vcov = stress_vcov, test = "F")
@@ -1774,7 +2043,7 @@ bind_rows(
 
 ## 7.4 Robustness of the Stress Results
 
-A single significant interaction could reflect a handful of months rather than a stable pattern. The model is re-estimated with each episode alone, with narrower and wider windows, and without the Cook's distance months from 4.5.4. Individual p-values use Newey-West standard errors; the joint test is reported with both Newey-West (`Joint_HAC_p`) and ordinary (`Joint_OLS_p`) standard errors, because HAC standard errors can be too small when an interaction is identified by only a few months.
+A single significant interaction could reflect a handful of months rather than a stable pattern. The model is re-estimated with each episode alone, with narrower and wider windows, and without the Cook's distance months from section section 5.4. Individual p-values use Newey-West standard errors; the joint test is reported with both Newey-West (`Joint_HAC_p`) and ordinary (`Joint_OLS_p`) standard errors, because HAC standard errors can be too small when an interaction is identified by only a few months.
 
 ```{r adv-robustness}
 stress_windows <- list(
@@ -1854,14 +2123,14 @@ tibble(
     "Change in market beta during stress",
     "VIX x Stress significant (HAC) under every robustness version",
     "AIC: improved vs. stress model",
-    "Final model carried into 4.8"
+    "Final model carried into section 8"
   ),
   Result = c(
     sprintf("F = %.2f, p = %.3f", stress_joint$F[2], stress_joint$`Pr(>F)`[2]),
     sprintf("%+.3f (p = %.3f)", regime_slopes$Difference[1], regime_slopes$Difference_p[1]),
     if_else(all(robustness_table$VIX_x_Stress_p < inference_alpha), "Yes", "No"),
     sprintf("%.2f vs. %.2f", AIC(improved_lm), AIC(stress_lm)),
-    "Improved model from 4.6 (winsorized manufacturing growth, Newey-West SEs)"
+    "Improved model from section 6 (winsorized manufacturing growth, Newey-West SEs)"
   )
 ) |>
   flextable::flextable()
@@ -1870,7 +2139,7 @@ tibble(
 
 # Section 8 - Financial Interpretation
 
-This section translates the final model (the improved model from 4.6) into quantities an investor would use: BDO's market beta, how much of its risk is market-driven, and what BDO's return looks like under different market scenarios. All returns are monthly log returns in percent.
+This section translates the final model (the improved model from section 6) into quantities an investor would use: BDO's market beta, how much of its risk is market-driven, and what BDO's return looks like under different market scenarios. All returns are monthly log returns in percent.
 
 ## 8.1 Market Beta
 
