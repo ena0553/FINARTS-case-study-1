@@ -110,15 +110,15 @@ This table reproduces the case brief. The **Source route** column determines whe
 ```{r variable-dictionary}
 variable_dictionary <- tribble(
   ~`#`, ~Candidate_Regressor,                 ~Dataset_Code,                  ~Transformation,           ~Source,                        ~Route,
-  0,    "BDO return (DEPENDENT)", "BDO_Return",                   "Monthly log return",      "Investing.com (price history)",    "Local CSV",
-  1,    "PSEi return",                        "PSEi_Return",                  "Monthly log return",      "Investing.com (price history)",    "Local CSV",
-  2,    "BSP RRP rate change",                "BSP_RRP_Change",               "Month-end first difference", "BSP",                         "Local CSV",
-  3,    "PH 10Y gov't-yield change",          "PH_10Y_Change",                "Month-end first difference", "Investing.com",         "Local CSV",
+  0,    "BDO return (DEPENDENT)", "BDO_return",                   "Monthly log return",      "Investing.com (price history)",    "Local CSV",
+  1,    "PSEi return",                        "PSEI_return",                  "Monthly log return",      "Investing.com (price history)",    "Local CSV",
+  2,    "BSP RRP rate change",                "BSP_RRP",               "Month-end first difference", "BSP",                         "Local CSV",
+  3,    "PH 10Y gov't-yield change",          "PH_10Y_Yield",                "Month-end first difference", "Investing.com",         "Local CSV",
   4,    "USD/PHP change",                     "USD_PHP_Change",               "Monthly log change",      "BSP monthly FX / Yahoo (PHP=X)", "Download via GetSymbols",
-  5,    "CPI inflation",                      "PH_CPI_YoY",                   "YoY % change",            "PSA",                 "Local CSV",
-  6,    "M3 growth",                          "PH_M3_YoY",                    "YoY % growth",            "---",       "Omitted",
-  7,    "OFW remittance growth",              "PH_OFW_Remittances_YoY",       "YoY % growth",            "BSP",           "Local CSV",
-  8,    "Manufacturing-production growth",    "PH_Manufacturing_Production_YoY", "YoY % growth",         "PSA MISSI",                    "Local CSV",
+  5,    "CPI inflation",                      "CPI",                   "YoY % change",            "PSA",                 "Local CSV",
+  6,    "M3 growth",                          "---",                    "YoY % growth",            "---",       "Omitted",
+  7,    "OFW remittance growth",              "OFW_remittances",       "YoY % growth",            "BSP",           "Local CSV",
+  8,    "Manufacturing-production growth",    "manufacturing_prod_growth", "YoY % growth",         "PSA MISSI",                    "Local CSV",
   9,    "WTI return",                         "WTI_Return",                   "Monthly log return",      "FRED DCOILWTICO",              "Download via GetSymbols",
   10,   "VIX",                                "VIX",                          "Monthly average",         "FRED VIXCLS",                  "Download via GetSymbols"
 )
