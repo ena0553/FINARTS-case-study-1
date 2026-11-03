@@ -625,7 +625,7 @@ Calculate coefficient tests, confidence intervals, effect sizes, and joint F-tes
 Test each coefficient against zero (two-sided, 5% level) and extract its estimate, standard error, t-statistic, and p-value.
 
 ```{r inference-individual-hypotheses, include=FALSE}
-# Define null and alternative hypotheses for the intercept and nine slopes
+# Define null and alternative hypotheses for the intercept and nine slopes.
 individual_hypotheses <- tibble(
   Term = names(coef(baseline_lm)),
   H0 = "This coefficient equals zero",
@@ -634,7 +634,7 @@ individual_hypotheses <- tibble(
 ```
 
 ```{r inference-coefficient-tests, include=FALSE}
-# Set the test threshold and define factor labels and scenario sizes
+# Set the test threshold and define factor labels and scenario sizes.
 inference_alpha <- 0.05
 
 factor_details <- tribble(
@@ -719,7 +719,7 @@ coefficient_results <- broom::tidy(
 ```
 
 ```{r inference-coefficient-table, echo=FALSE}
-# Format p-values for display without modifying the numeric test results
+# Format p-values for display without modifying the numeric test results.
 scientific_small_p <- function(x) {
   displayed <- as.character(x)
   small <- !is.na(x) & x < 1e-4
@@ -748,7 +748,7 @@ coefficient_table
 Use `confint()` to obtain 95% coefficient intervals and check whether they include zero.
 
 ```{r inference-confidence-intervals, include=FALSE}
-# Obtain 95% coefficient intervals and flag those containing zero
+# Obtain 95% coefficient intervals and flag those containing zero.
 confidence_intervals <- confint(
   baseline_lm,
   level = 1 - inference_alpha
@@ -778,7 +778,7 @@ confidence_intervals <- confidence_intervals |>
 ```
 
 ```{r inference-confidence-intervals-table, echo=FALSE}
-# Display every coefficient's numerical estimate and confidence limits
+# Display every coefficient's numerical estimate and confidence limits.
 confidence_display <- confidence_intervals |>
   transmute(
     Factor = Variable,
@@ -797,7 +797,7 @@ confidence_table
 Calculate one-standard-deviation effects and all nine predefined scenarios from the fitted coefficients.
 
 ```{r inference-economic-significance, include=FALSE}
-# Calculate standardized effects and one-factor scenario changes
+# Calculate standardized effects and one-factor scenario changes.
 bdo_return_sd <- sd(model_data[[dep_var]])
 
 economic_effects <- coefficient_results |>
@@ -831,7 +831,7 @@ economic_effects <- coefficient_results |>
 ```
 
 ```{r inference-standardized-effects-table, echo=FALSE}
-# Report all standardized effects, using the calculated results
+# Report all standardized effects, using the calculated results.
 standardized_display <- economic_effects |>
   transmute(
     Factor = Variable,
@@ -846,7 +846,7 @@ standardized_table
 ```
 
 ```{r inference-scenarios-table, echo=FALSE}
-# Include all nine predefined scenarios and their confidence limits
+# Include all nine predefined scenarios and their confidence limits.
 scenario_display <- economic_effects |>
   transmute(
     Factor = Variable,
@@ -866,7 +866,7 @@ scenario_table
 Calculate the overall F-test and compare `market_lm` with `baseline_lm` using `anova()`.
 
 ```{r inference-joint-hypotheses, include=FALSE}
-# Define the two groups of coefficients tested jointly
+# Define the two groups of coefficients tested jointly.
 joint_hypotheses <- tribble(
   ~Test, ~H0, ~H1,
 
@@ -881,7 +881,7 @@ joint_hypotheses <- tribble(
 ```
 
 ```{r inference-joint-tests, include=FALSE}
-# Fit the PSEi-only model and compare it with the full baseline
+# Fit the PSEi-only model and compare it with the full baseline.
 market_lm <- lm(
   BDO_return ~ PSEI_return,
   data = model_data
@@ -932,7 +932,7 @@ joint_test_results <- tibble(
 ```
 
 ```{r inference-joint-tests-table, echo=FALSE}
-# Show complete F-statistics, degrees of freedom, and p-values
+# Show complete F-statistics, degrees of freedom, and p-values.
 joint_display <- joint_test_results |>
   transmute(
     `Joint test` = Test,
@@ -946,15 +946,6 @@ joint_display <- joint_test_results |>
 research_flextable(joint_display)
 ```
 
-```{r inference-joint-anova-table, echo=FALSE}
-# Show the full market-only versus baseline ANOVA table
-joint_anova_display <- tibble::rownames_to_column(
-  as.data.frame(nonmarket_joint_test), "Model"
-)
-joint_anova_display$`Pr(>F)` <- scientific_small_p(joint_anova_display$`Pr(>F)`)
-research_flextable(joint_anova_display)
-```
-
 # Section 4 - Model Evaluation and Comparison
 
 Compare three nested models using fit criteria, in-sample errors, and F-tests.
@@ -964,7 +955,7 @@ Compare three nested models using fit criteria, in-sample errors, and F-tests.
 Fit the domestic model and verify that all three models use the same observations.
 
 ```{r comparison-models, include=FALSE}
-# Fit the domestic model and verify comparable samples across models
+# Fit the domestic model and verify comparable samples across models.
 domestic_lm <- lm(
   BDO_return ~ PSEI_return + BSP_RRP + PH_10Y_Yield + USD_PHP_Change + 
     CPI + OFW_remittance + manafactuting_prod_growth,
@@ -998,7 +989,7 @@ stopifnot(all(vapply(
 List the factors added at each model stage.
 
 ```{r comparison-model-specification-table, echo=FALSE}
-# Summarize the regressors included in the three estimated models
+# Summarize the regressors included in the three estimated models.
 model_factor_labels <- c(
   PSEI_return = "PSEi return",
   BSP_RRP = "BSP policy-rate change",
@@ -1037,7 +1028,7 @@ M3 growth is not included because its data were unavailable.
 Calculate R-squared, adjusted R-squared, AIC, BIC, RMSE, and MAE for each model.
 
 ```{r comparison-fit-table, include=FALSE}
-# Collect fit and error criteria for every model
+# Collect fit and error criteria for every model.
 model_comparison <- purrr::imap_dfr(
   comparison_models,
   function(fit, model_name) {
@@ -1057,7 +1048,7 @@ model_comparison <- purrr::imap_dfr(
 ```
 
 ```{r comparison-fit-results-table, echo=FALSE}
-# Display numeric results for model fit and model complexity.
+# Display fit, complexity, and in-sample errors in one table.
 fit_display <- model_comparison |>
   transmute(
     Model = Model,
@@ -1066,18 +1057,13 @@ fit_display <- model_comparison |>
     `R-squared` = R_Squared,
     `Adjusted R-squared` = Adjusted_R_Squared,
     AIC = AIC,
-    BIC = BIC
+    BIC = BIC,
+    RMSE = RMSE,
+    MAE = MAE
   )
 
 fit_table <- research_flextable(fit_display)
 fit_table
-```
-
-```{r comparison-errors-table, echo=FALSE}
-# Display in-sample error measures for each model
-error_display <- model_comparison |>
-  select(Model, RMSE, MAE)
-research_flextable(error_display)
 ```
 
 ## 4.3 Nested-Model Comparisons
@@ -1085,7 +1071,7 @@ research_flextable(error_display)
 Use `anova()` to test the additional domestic and global factors.
 
 ```{r comparison-nested-hypotheses, include=FALSE}
-# Define the coefficient restrictions for each nested model comparison
+# Define the coefficient restrictions for each nested model comparison.
 nested_hypotheses <- tribble(
   ~Comparison, ~H0, ~H1,
 
@@ -1100,7 +1086,7 @@ nested_hypotheses <- tribble(
 ```
 
 ```{r comparison-nested-tests, include=FALSE}
-# Run nested ANOVA tests and extract test statistics and p-values
+# Run nested ANOVA tests and extract test statistics and p-values.
 nested_tests <- list(
   "Domestic conditions beyond market" =
     anova(market_lm, domestic_lm),
@@ -1132,7 +1118,7 @@ nested_test_results <- purrr::imap_dfr(
 ```
 
 ```{r comparison-nested-results-table, echo=FALSE}
-# Present both nested-model tests with the calculated results
+# Present both nested-model tests with the calculated results.
 nested_display <- nested_test_results |>
   transmute(
     Comparison = Comparison,
@@ -1147,30 +1133,12 @@ nested_display <- nested_test_results |>
 research_flextable(nested_display)
 ```
 
-```{r comparison-nested-anova-domestic-table, echo=FALSE}
-# Complete ANOVA for the six domestic factors added to PSEi
-domestic_anova_display <- tibble::rownames_to_column(
-  as.data.frame(nested_tests[["Domestic conditions beyond market"]]), "Model"
-)
-domestic_anova_display$`Pr(>F)` <- scientific_small_p(domestic_anova_display$`Pr(>F)`)
-research_flextable(domestic_anova_display)
-```
-
-```{r comparison-nested-anova-global-table, echo=FALSE}
-# Complete ANOVA for WTI and VIX added to the domestic model
-global_anova_display <- tibble::rownames_to_column(
-  as.data.frame(nested_tests[["Global factors beyond domestic model"]]), "Model"
-)
-global_anova_display$`Pr(>F)` <- scientific_small_p(global_anova_display$`Pr(>F)`)
-research_flextable(global_anova_display)
-```
-
 ## 4.4 PSEi Coefficient across Models
 
 Extract PSEi coefficients, test statistics, p-values, and 95% intervals across models.
 
 ```{r comparison-market-coefficient, include=FALSE}
-# Collect PSEi coefficients and confidence intervals across specifications
+# Collect PSEi coefficients and confidence intervals across specifications.
 market_coefficient_comparison <- purrr::imap_dfr(
   comparison_models,
   function(fit, model_name) {
@@ -1186,7 +1154,7 @@ market_coefficient_comparison <- purrr::imap_dfr(
 ```
 
 ```{r comparison-market-coefficients-table, echo=FALSE}
-# Show the complete PSEi estimates and uncertainty across models
+# Show the complete PSEi estimates and uncertainty across models.
 market_display <- market_coefficient_comparison |>
   transmute(
     Model = Model,
@@ -1207,7 +1175,7 @@ market_table
 Identify the best-scoring specification for adjusted R-squared, AIC, and BIC.
 
 ```{r comparison-summary, include=FALSE}
-# Identify the best-scoring model for each selection criterion
+# Identify the best-scoring model for each selection criterion.
 best_adjusted_r2_model <- model_comparison$Model[
   which.max(model_comparison$Adjusted_R_Squared)
 ]
@@ -1235,7 +1203,7 @@ criterion_summary <- tibble(
 ```
 
 ```{r comparison-criteria-table, echo=FALSE}
-# Show the selected model and full numerical value for each criterion
+# Show the selected model and full numerical value for each criterion.
 criteria_display <- criterion_summary |>
   mutate(
     Value = c(
