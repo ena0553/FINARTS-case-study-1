@@ -607,8 +607,25 @@ tibble(
   cobalt_kable(caption = "Baseline Linear Regression — Fit (in-sample)")
 coef(baseline_lm)
 ```
+The model's equation is as follows:
 
+$$
+\begin{aligned}
+\text{BDO_return}_t = {} & \beta_0 + \beta_1\text{PSEi_return}_t + \beta_2\text{BSP_RRP}_t + \beta_3\text{PH_10Y_Yield}_t \\
+& + \beta_4\text{CPI}_t + \beta_5\text{OFW_remittance}_t + \beta_6\text{Mfg_growth}_t \\
+& + \beta_7\text{USD_PHP}_t + \beta_8\text{WTI_Return}_t + \beta_9\text{VIX}_t + u_t
+\end{aligned}
+$$
 
+Using the data, the regression equation with coefficients is:
+
+$$
+\begin{aligned}
+\widehat{\text{BDO_return}}_t = {} & 0.1716 + 1.0408\text{PSEi_return}_t - 0.5527\text{BSP_RRP}_t - 0.1097\text{PH_10Y_Yield}_t \\
+& + 0.3298\text{CPI}_t + 0.0796\text{OFW_remittance}_t + 0.0004\text{Mfg_growth}_t \\
+& + 27.2441\text{USD_PHP}_t + 2.8153\text{WTI_Return}_t - 0.0649\text{VIX}_t
+\end{aligned}
+$$
 
 # Section 3 - Statistical Inference
 
