@@ -617,7 +617,7 @@ $$
 \end{aligned}
 $$
 
-Using the data, the regression equation with coefficients is:
+Using the coefficients, the updated regression equation is:
 
 $$
 \begin{aligned}
